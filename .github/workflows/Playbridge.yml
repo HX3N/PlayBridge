@@ -1,0 +1,76 @@
+name: PlayBridge
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build_and_release:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          target: x86_64-pc-windows-msvc
+          override: true
+
+      - name: Extract Cargo Version
+        id: cargo_version
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*".*"$').Matches[0].Value
+          $version = $version -replace '^version\s*=\s*"', ''
+          $version = $version -replace '"$', ''
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Convert run_number to SHA-1 and extract first 5 characters
+        id: short_sha
+        run: |
+          $runNumber = "${{ github.run_number }}"
+          $sha1 = [System.Security.Cryptography.SHA1]::Create()
+          $bytes = [System.Text.Encoding]::UTF8.GetBytes($runNumber)
+          $hashBytes = $sha1.ComputeHash($bytes)
+          $hash = [BitConverter]::ToString($hashBytes) -replace '-', ''
+          $shortSha = $hash.Substring(0, 5).ToLower()
+          echo "SHORT_SHA=$shortSha" >> $env:GITHUB_OUTPUT
+
+      - name: info
+        run: |
+          echo "tag_name: v${{ steps.cargo_version.outputs.VERSION }}_${{ steps.short_sha.outputs.SHORT_SHA }}"
+          echo "release_name: v${{ steps.cargo_version.outputs.VERSION }}_${{ steps.short_sha.outputs.SHORT_SHA }}"
+
+      - name: Build
+        run: cargo build --release --verbose
+
+      - name: List build directory
+        run: dir target\release\
+
+      - name: Create release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.cargo_version.outputs.VERSION }}_${{ steps.short_sha.outputs.SHORT_SHA }}
+          release_name: v${{ steps.cargo_version.outputs.VERSION }}_${{ steps.short_sha.outputs.SHORT_SHA }}
+          draft: false
+          prerelease: false
+
+      - name: Upload release assets
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: target/release/PlayBridge-adb.exe
+          asset_name: PlayBridge-adb.exe
+          asset_content_type: application/octet-stream
