@@ -1,5 +1,5 @@
 [package]
-name = "PlayBridge"
+name = "PlayBridge-adb"
 version = "0.2.8"
 edition = "2021"
 
