@@ -293,17 +293,12 @@ fn process_image(image: &RgbaImage, width: i32, height: i32) -> DynamicImage {
     let error_margin = 0.0005;
 
     if (ratio - target_ratio).abs() > error_margin {
-        notification::show_notification("not_16_9_ratio", Some(&format!("현재 화면 비율 (16:{:.0})", ratio * 16.0)));
+        notification::show_notification("not_16_9_ratio", Some(&format!("16:{:.0}", ratio * 16.0)));
     } else if (width as f32) < (DISPLAY_WIDTH * 0.825) || (height as f32) < (DISPLAY_HEIGHT * 0.825) {
-        notification::show_notification("resolution_too_low", Some(&format!("현재 화면 해상도 ({}x{})", width, height)));
+        notification::show_notification("resolution_too_low", Some(&format!("{}x{}", width, height)));
+    } else {
+        notification::check_and_update_resolution(width as u32, height as u32);
     }
-
-    /*
-        let scaled_image = cropped_dynamic_image.resize_exact(DISPLAY_WIDTH as u32, DISPLAY_HEIGHT as u32, FilterType::Lanczos3);
-        DynamicImage::ImageRgba8(image.clone()).save("img/original.png").unwrap();
-        cropped_dynamic_image.save("img/cropped.png").unwrap();
-        scaled_image.save("img/scaled.png").unwrap();
-    */
 
     cropped_dynamic_image
 }
