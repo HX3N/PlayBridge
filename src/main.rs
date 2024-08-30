@@ -290,7 +290,7 @@ fn process_image(image: &RgbaImage, width: i32, height: i32) -> DynamicImage {
     let ratio = (cropped_height as f32) / (cropped_width as f32);
 
     let target_ratio = 0.5625; // 16:9 ratio ~0.5625
-    let error_margin = 0.0005;
+    let error_margin = 0.001;
 
     if (ratio - target_ratio).abs() > error_margin {
         notification::show_notification("not_16_9_ratio", Some(&format!("16:{:.0}", ratio * 16.0)));
