@@ -38,11 +38,11 @@ fn get_notification_details(cause: &str, spec: Option<&str>) -> NotificationDeta
     let (title, body) = match cause {
         "start_arknights" => (INFO, "명일방주 실행".to_string()),
         "shutdown_arknights" => (INFO, "명일방주 종료".to_string()),
+        "resolution_init" => (INFO, format!("해상도는 다음과 같습니다 ({})", spec.expect(""))),
         "resolution_change" => (INFO, format!("해상도가 변경되었습니다 ({})", spec.expect(""))),
-        "not_16_9_ratio" | "resolution_too_low" => {
-            let prefix = if cause == "not_16_9_ratio" { "화면 비율이 16:9가 아닙니다" } else { "해상도가 너무 작습니다" };
-            (WARNING, format!("{} ({})\nMAA의 인식에 문제가 생길 수 있습니다!", prefix, spec.expect("")))
-        }
+        "not_16_9_ratio" => (WARNING, format!("화면 비율이 16:9가 아닙니다 ({})\nMAA의 인식에 문제가 생길 수 있습니다!", spec.expect(""))),
+        "minimized_not_supported" => (WARNING, "최소화된 창 인식은 지원되지 않습니다\n원활한 동작을 위해 창을 복원합니다!".to_string()),
+        "resolution_too_low" => (WARNING, format!("해상도가 너무 작습니다 ({})\nMAA의 인식에 문제가 생길 수 있습니다!", spec.expect(""))),
         "unknown_command" => (ERROR, format!("알 수 없는 명령어입니다!\n{}", spec.expect(""))),
         _ => ("Unknown notification", cause.to_string()),
     };
@@ -63,10 +63,7 @@ pub fn show_notification(cause: &str, spec: Option<&str>) {
         let manager = ToastManager::new(AUM_ID);
         let mut toast = Toast::new();
         toast.tag(&details.tag);
-        toast
-            .text1(&details.title)
-            .text2(Text::new(&details.body))
-            .text3(Text::new(format!("tag: {}", &details.tag)).with_placement(TextPlacement::Attribution));
+        toast.text1(&details.title).text2(Text::new(&details.body)).text3(Text::new(format!("tag: {}", &details.tag)).with_placement(TextPlacement::Attribution));
         toast.scenario(Scenario::Reminder);
 
         manager.show(&toast).expect("Failed to show toast");
@@ -84,15 +81,11 @@ pub fn check_and_update_resolution(width: u32, height: u32) {
     let stored_width: u32 = key.get_value("resolution_width").unwrap_or(0);
     let stored_height: u32 = key.get_value("resolution_height").unwrap_or(0);
 
-    let resolution_changed = stored_width != width || stored_height != height;
-    let first_run = stored_width * stored_height == 0;
-
-    if first_run || resolution_changed {
+    if stored_width != width || stored_height != height {
         key.set_value("resolution_width", &width).expect("Failed to write width to registry");
         key.set_value("resolution_height", &height).expect("Failed to write height to registry");
 
-        if resolution_changed && !first_run {
-            show_notification("resolution_change", Some(&format!("{}x{}", width, height)));
-        }
+        let notification_type = if stored_width == 0 || stored_height == 0 { "resolution_init" } else { "resolution_change" };
+        show_notification(notification_type, Some(&format!("{}x{}", width, height)));
     }
 }

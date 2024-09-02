@@ -16,9 +16,12 @@ const DISPLAY_WIDTH: f32 = 1280.0;
 const DISPLAY_HEIGHT: f32 = 720.0;
 const POLLING_RATE: i32 = 1000 / 500;
 
+// Constants defining the ratio of each sector
 const SWIPE_START_TO_MID_RATIO: f32 = 0.9;
-const SWIPE_START_TO_MID_SPEED: f32 = 10.0;
 const SWIPE_MID_TO_END_RATIO: f32 = 0.1;
+
+// Constants defining the speed of each sector. Values between 2-12 are recommended
+const SWIPE_START_TO_MID_SPEED: f32 = 10.0;
 const SWIPE_MID_TO_END_SPEED: f32 = 2.0;
 
 fn get_hwnd() -> Option<HWND> {
@@ -84,18 +87,12 @@ fn parse_command(args: &[String]) -> Command {
 
 fn start_arknights() {
     _ = open::that(format!("googleplaygames://launch/?id={}", PACKAGE));
-    println!("start Arknights");
 
-    loop {
-        if get_hwnd().is_some() {
-            println!("> start Arknights success!");
-            notification::show_notification("start_arknights", None);
-            break;
-        }
-
-        println!("Waiting for Arknights to start...");
+    while get_hwnd().is_none() {
         std::thread::sleep(Duration::from_millis(500));
     }
+
+    notification::show_notification("start_arknights", None);
 }
 
 fn execute_command(command: Command) {
@@ -144,7 +141,7 @@ fn execute_command(command: Command) {
 }
 
 fn get_gpg_info() -> (HWND, i32, i32) {
-    let hwnd = get_hwnd().expect("Failed to get HWND");
+    let hwnd = get_hwnd().unwrap();
 
     let mut client_rect = RECT::default();
     unsafe { _ = GetClientRect(hwnd, &mut client_rect) };
@@ -204,7 +201,7 @@ fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
 }
 
 fn input_keyevent(keycode: i32) {
-    let hwnd = get_hwnd().expect("Failed to get HWND");
+    let hwnd = get_hwnd().unwrap();
 
     let wparam = WPARAM(keycode as usize);
     let down = LPARAM((keycode << 16) as isize);
@@ -217,8 +214,8 @@ fn input_keyevent(keycode: i32) {
 }
 
 fn capture() -> DynamicImage {
-    let hwnd = get_hwnd().expect("Failed to get HWND");
-    let swnd = unsafe { FindWindowExA(hwnd, HWND(std::ptr::null_mut()), s!("subWin"), PCSTR::null()).unwrap() };
+    let hwnd = get_hwnd().unwrap();
+    let swnd = unsafe { FindWindowExA(hwnd, None, s!("subWin"), PCSTR::null()).unwrap() };
 
     let mut rect = RECT::default();
     unsafe { GetWindowRect(swnd, &mut rect).unwrap() };
@@ -270,7 +267,7 @@ fn capture() -> DynamicImage {
 }
 
 fn terminate() {
-    let hwnd = get_hwnd().expect("Failed to get HWND");
+    let hwnd = get_hwnd().unwrap();
     unsafe { _ = PostMessageA(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0)) };
 }
 
@@ -294,6 +291,9 @@ fn process_image(image: &RgbaImage, width: i32, height: i32) -> DynamicImage {
 
     if (ratio - target_ratio).abs() > error_margin {
         notification::show_notification("not_16_9_ratio", Some(&format!("16:{:.0}", ratio * 16.0)));
+    } else if width < 2 && height < 2 {
+        unsafe { ShowWindow(get_hwnd().unwrap(), SW_RESTORE).unwrap() };
+        notification::show_notification("minimized_not_supported", None);
     } else if (width as f32) < (DISPLAY_WIDTH * 0.825) || (height as f32) < (DISPLAY_HEIGHT * 0.825) {
         notification::show_notification("resolution_too_low", Some(&format!("{}x{}", width, height)));
     } else {
