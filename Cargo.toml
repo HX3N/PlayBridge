@@ -9,6 +9,7 @@ edition = "2021"
 image = "*"
 open = "*"
 spin_sleep = "*"
+chrono = "*"
 windows = {version = "*", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_Xps", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging"]}
 winrt-toast = "0.1.1"
 winreg = "*"

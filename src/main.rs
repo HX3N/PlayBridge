@@ -2,8 +2,9 @@
 
 mod notification;
 
+use chrono::Local;
 use image::{codecs::png::PngEncoder, imageops::crop_imm, imageops::FilterType, DynamicImage, RgbaImage};
-use std::{env, io::*, mem, time::Duration};
+use std::{env, fs::File, io::*, mem, time::Duration};
 use windows::{
     core::*,
     Win32::{Foundation::*, Graphics::Gdi::*, Storage::Xps::*, UI::HiDpi::*, UI::WindowsAndMessaging::*},
@@ -29,6 +30,7 @@ fn get_hwnd() -> Option<HWND> {
 }
 
 enum Command {
+    Empty,
     Connect,
     GetPropVersionRelease,
     StartActivity { intent: String },
@@ -54,6 +56,10 @@ fn main() {
 }
 
 fn parse_command(args: &[String]) -> Command {
+    if args.len() <= 1 {
+        return Command::Empty;
+    }
+
     let full_command = args.join(" ");
 
     match full_command.as_str() {
@@ -97,6 +103,12 @@ fn start_arknights() {
 
 fn execute_command(command: Command) {
     match command {
+        Command::Empty => {
+            let filename = format!("Screenshot_{}.png", Local::now().format("%Y.%m.%d_%H.%M.%S.%3f"));
+            let filepath = format!("{}\\Desktop\\{}", env::var("USERPROFILE").unwrap(), filename);
+            capture().write_with_encoder(PngEncoder::new(File::create(&filepath).unwrap())).unwrap();
+            notification::show_notification("screenshot_saved", Some(&filename));
+        }
         Command::Connect => {
             // maa needs this output
             println!("connected to Google Play Games Beta");

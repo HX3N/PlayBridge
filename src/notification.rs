@@ -38,6 +38,7 @@ fn get_notification_details(cause: &str, spec: Option<&str>) -> NotificationDeta
     let (title, body) = match cause {
         "start_arknights" => (INFO, "명일방주 실행".to_string()),
         "shutdown_arknights" => (INFO, "명일방주 종료".to_string()),
+        "screenshot_saved" => (INFO, format!("바탕화면에 스크린샷이 저장되었습니다!\n{}", spec.expect(""))),
         "resolution_init" => (INFO, format!("해상도는 다음과 같습니다 ({})", spec.expect(""))),
         "resolution_change" => (INFO, format!("해상도가 변경되었습니다 ({})", spec.expect(""))),
         "not_16_9_ratio" => (WARNING, format!("화면 비율이 16:9가 아닙니다 ({})\nMAA의 인식에 문제가 생길 수 있습니다!", spec.expect(""))),
