@@ -83,7 +83,8 @@ fn parse_command(args: &[String]) -> Command {
             || c.contains("exec-out screencap | nc -w 3")
             || c.contains("exec-out screencap | gzip -1")
             || c.contains("start-server")
-            || c.contains("kill-server") =>
+            || c.contains("kill-server")
+            || c.contains("devices") =>
         {
             Command::ExceptionCommand(full_command)
         }
@@ -144,7 +145,7 @@ fn execute_command(command: Command) {
             terminate();
             notification::show_notification("shutdown_arknights", None);
         }
-        Command::ExceptionCommand(cmd) => println!("Exception: {}", cmd),
+        Command::ExceptionCommand(cmd) => println!("PlayBridge: {} (Exception)", cmd),
         Command::Unknown(cmd) => {
             println!("PlayBridge: {} (Unknown command)", cmd);
             notification::show_notification("unknown_command", Some(&format!("{}", cmd)));
