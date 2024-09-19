@@ -13,3 +13,9 @@ chrono = "*"
 windows = {version = "*", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_Xps", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging"]}
 winrt-toast = "0.1.1"
 winreg = "*"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = 'abort'
+strip = true
