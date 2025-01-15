@@ -6,13 +6,13 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-image = "*"
-open = "*"
-spin_sleep = "*"
-chrono = "*"
-windows = {version = "*", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_Xps", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging"]}
+image = "0.25.2"
+open = "5.3.0"
+spin_sleep = "1.2.1"
+chrono = "0.4.38"
+windows = { version = "0.58.0", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_Xps", "Win32_UI_HiDpi", "Win32_UI_WindowsAndMessaging"] }
 winrt-toast = "0.1.1"
-winreg = "*"
+winreg = "0.52.0"
 
 [profile.release]
 lto = true

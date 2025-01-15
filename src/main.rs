@@ -75,7 +75,7 @@ fn parse_command(args: &[String]) -> Command {
             duration: args[10].parse().unwrap(),
         },
         c if c.contains("input keyevent 111") => Command::InputKeyEvent { keycode: 0x01 },
-        c if c.contains("dumpsys window displays") => Command::DumpsysWindowDisplays,
+        c if c.contains("dumpsys window displays") || c.contains("wm size") => Command::DumpsysWindowDisplays,
         c if c.contains("exec-out screencap -p") => Command::ExecOutScreencap,
         c if c.contains("am force-stop") || c.contains("input keyevent HOME") => Command::ForceStop,
         c if c.contains("cat /proc/net/arp")
