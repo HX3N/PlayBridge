@@ -1,6 +1,5 @@
 use std::{
-    env,
-    path::Path,
+    env, fs,
     time::{SystemTime, UNIX_EPOCH},
 };
 use winreg::{enums::*, RegKey};
@@ -14,6 +13,8 @@ const DISPLAY_NAME: &str = "PlayBridge";
 const INFO: &str = "ℹ️ 정보";
 const WARNING: &str = "⚠️ 경고";
 const ERROR: &str = "⛔ 오류";
+
+const ICON_DATA: &[u8] = include_bytes!("../assets/icon.png");
 
 pub struct NotificationDetails {
     title: String,
@@ -37,6 +38,7 @@ fn check_notification_registry(tag: &str, now: u64, cooldown_seconds: u64) -> bo
 fn get_notification_details(cause: &str, spec: Option<&str>) -> NotificationDetails {
     let (title, body) = match cause {
         "start_arknights" => (INFO, "명일방주 실행".to_string()),
+        "start_arknights_failed" => (WARNING, "명일방주 실행에 실패했습니다!".to_string()),
         "shutdown_arknights" => (INFO, "명일방주 종료".to_string()),
         "screenshot_saved" => (INFO, format!("바탕화면에 스크린샷이 저장되었습니다!\n{}", spec.expect(""))),
         "resolution_init" => (INFO, format!("해상도는 다음과 같습니다 ({})", spec.expect(""))),
@@ -53,12 +55,15 @@ fn get_notification_details(cause: &str, spec: Option<&str>) -> NotificationDeta
 
 pub fn show_notification(cause: &str, spec: Option<&str>) {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-
     let details = get_notification_details(cause, spec);
 
     if details.tag == "resolution_change" || check_notification_registry(&details.tag, now, COOLDOWN_SECONDS) {
-        let current_dir = env::current_dir().expect("Failed to get current directory");
-        let icon_path = current_dir.join(Path::new("resource\\template\\items\\act24side_melding_6.png"));
+        let icon_path = env::temp_dir().join("playbridge_icon.png");
+
+        if !icon_path.exists() {
+            fs::write(&icon_path, ICON_DATA).expect("Failed to write icon file");
+        }
+
         let _ = register(AUM_ID, DISPLAY_NAME, Some(&icon_path));
 
         let manager = ToastManager::new(AUM_ID);

@@ -95,11 +95,13 @@ fn parse_command(args: &[String]) -> Command {
 fn start_arknights() {
     _ = open::that(format!("googleplaygames://launch/?id={}", PACKAGE));
 
-    while get_hwnd().is_none() {
-        std::thread::sleep(Duration::from_millis(500));
-    }
+    std::thread::sleep(Duration::from_millis(15000));
 
-    notification::show_notification("start_arknights", None);
+    if get_hwnd().is_some() {
+        notification::show_notification("start_arknights", None);
+    } else {
+        notification::show_notification("start_arknights_failed", None);
+    }
 }
 
 fn execute_command(command: Command) {
