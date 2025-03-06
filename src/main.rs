@@ -35,12 +35,14 @@ enum Command {
     GetPropVersionRelease,
     StartActivity { intent: String },
     InputTap { x: i32, y: i32 },
+    InputText { text: String },
     InputSwipe { x1: i32, y1: i32, x2: i32, y2: i32, duration: i32 },
     InputKeyEvent { keycode: i32 },
     DumpsysWindowDisplays,
     ExecOutScreencap,
     ForceStop,
-    ExceptionCommand(String),
+    GetUUID,
+    IgnoreCommand,
     Unknown(String),
 }
 
@@ -67,6 +69,7 @@ fn parse_command(args: &[String]) -> Command {
         c if c.contains("getprop ro.build.version.release") => Command::GetPropVersionRelease,
         c if c.contains("am start -n") => Command::StartActivity { intent: args[7].clone() },
         c if c.contains("input tap") => Command::InputTap { x: args[6].parse().unwrap(), y: args[7].parse().unwrap() },
+        c if c.contains("input text") => Command::InputText { text: args[6..].join(" ") },
         c if c.contains("input swipe") => Command::InputSwipe {
             x1: args[6].parse().unwrap(),
             y1: args[7].parse().unwrap(),
@@ -78,15 +81,15 @@ fn parse_command(args: &[String]) -> Command {
         c if c.contains("dumpsys window displays") || c.contains("wm size") => Command::DumpsysWindowDisplays,
         c if c.contains("exec-out screencap -p") => Command::ExecOutScreencap,
         c if c.contains("am force-stop") || c.contains("input keyevent HOME") => Command::ForceStop,
+        c if c.contains("settings get secure android_id") => Command::GetUUID,
         c if c.contains("cat /proc/net/arp")
-            || c.contains("settings get secure android_id")
             || c.contains("exec-out screencap | nc -w 3")
             || c.contains("exec-out screencap | gzip -1")
             || c.contains("start-server")
             || c.contains("kill-server")
             || c.contains("devices") =>
         {
-            Command::ExceptionCommand(full_command)
+            Command::IgnoreCommand
         }
         _ => Command::Unknown(full_command),
     }
@@ -132,6 +135,9 @@ fn execute_command(command: Command) {
         Command::InputTap { x, y } => {
             input_tap(x, y);
         }
+        Command::InputText { text } => {
+            input_text(&text);
+        }
         Command::InputSwipe { x1, y1, x2, y2, duration } => {
             input_swipe(x1, y1, x2, y2, duration);
         }
@@ -150,7 +156,10 @@ fn execute_command(command: Command) {
             terminate();
             notification::show_notification("shutdown_arknights", None);
         }
-        Command::ExceptionCommand(cmd) => println!("PlayBridge: {} (Exception)", cmd),
+        Command::GetUUID => {
+            println!("GooglePlayGames");
+        }
+        Command::IgnoreCommand => {}
         Command::Unknown(cmd) => {
             println!("PlayBridge: {} (Unknown command)", cmd);
             notification::show_notification("unknown_command", Some(&format!("{}", cmd)));
@@ -181,6 +190,17 @@ fn input_tap(x: i32, y: i32) {
     unsafe {
         _ = PostMessageA(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos));
         _ = PostMessageA(hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(pos));
+    }
+}
+
+fn input_text(text: &str) {
+    let hwnd = get_hwnd().unwrap();
+
+    for ch in text.chars() {
+        unsafe {
+            _ = PostMessageA(hwnd, WM_CHAR, WPARAM(ch as usize), LPARAM(0));
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
