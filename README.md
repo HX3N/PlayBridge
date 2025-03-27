@@ -1,18 +1,35 @@
-# PlayBridge
+> [!Note]
+> This repository is a **customized fork** of [PlayBridge](https://github.com/ACK72/PlayBridge).
 
-Simple ADB emulator for Google Play Games, especially for Arknights & MAA
+### Setup
 
-## Download
+Place `PlayBridge-adb.exe` inside the MAA folder.<br>
+Then, go to **MAA > Settings > Connection Settings** and configure as follows:
 
-- You can get latest builds at [release page](https://github.com/ACK72/PlayBridge/releases/latest)
+| ADB Path           | Connection Address | Input Method |
+| ------------------ | ------------------ | ------------ |
+| PlayBridge-adb.exe | 127.0.0.1:5000     | ADB Input    |
 
-## Set-Up
-![setting](https://github.com/ACK72/PlayBridge/assets/25812442/69f980b6-7c9e-4a93-b1b5-f2a21c1b0680)
+### Config
 
-- Change the settings in MAA as shown above.
+You can enter config mode by including `-config` in the executable name and running it.
 
-## Limitations
+Available settings:
 
-- The deployed build files are targeting Korean servers and windows. (Modify the TITLE constant in the source file with the name of the window you want to apply)
-- Of the special keys, currently, only ESC key input supported. This may be updated in the future.
-- (Arknights & MAA only) All features are currently working, but due to differences in in-game graphics between Android and Google Play Games Beta, MAA may not work smoothly in certain situations.
+- `REGION`: Select the server region **KR / EN / JP**
+- `SWIPE_SPEED`: Adjust the swipe speed (Recommended 4~16)
+- `DISPLAY_WIDTH` / `DISPLAY_HEIGHT`: Set the resolution of the image passed to MAA
+
+### Screenshot
+
+Running the executable directly captures a screenshot of **Google Play Games Beta** and saves it to the Desktop.
+
+> The image resolution follows the `DISPLAY_WIDTH` / `DISPLAY_HEIGHT` settings.
+
+### Notification
+
+Displays Windows toast notifications for events such as:
+
+- Resolution changes
+- Unknown or unsupported commands
+- Low resolution or incorrect aspect ratio (non-16:9)
