@@ -3,7 +3,7 @@
 
 ### Setup
 
-Place `PlayBridge-adb.exe` inside the MAA folder.<br>
+Download [PlayBridge-adb.exe](https://github.com/HX3N/PlayBridge/releases/latest) and place it inside the MAA folder.<br>
 Then, go to **MAA > Settings > Connection Settings** and configure as follows:
 
 | ADB Path           | Connection Address | Input Method |
