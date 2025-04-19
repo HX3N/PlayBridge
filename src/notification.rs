@@ -1,26 +1,51 @@
 use std::{
-    env, fs,
+    env, fs, io,
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::utils::*;
+use crate::CONFIG;
 use winreg::{enums::*, RegKey};
 use winrt_toast::{content::text::TextPlacement, register, Scenario, Toast, ToastManager};
 
-pub const NOTIFICATION_REGISTRY_PATH: &str = r"Software\PlayBridge\Notification";
-const COOLDOWN_SECONDS: u64 = 20; // Minimum time between notifications of the same type
-const AUM_ID: &str = "PlayBridge"; // Application User Model ID for Windows notifications
-const DISPLAY_NAME: &str = "PlayBridge";
-
-pub const INFO: &str = "ℹ️ Info";
-pub const WARN: &str = "⚠️ Warning";
-pub const ERR: &str = "⛔ ERROR";
-pub const DEBUG: &str = "🛠️ Debug";
+pub const NOTIFICATION_REGISTRY_PATH: &str = r"Software\PlayBridge ADB";
+const COOLDOWN_SECONDS: u64 = 20;
+const AUM_ID: &str = "PlayBridge ADB";
+const DISPLAY_NAME: &str = "PlayBridge ADB";
 
 const ICON_DATA: &[u8] = include_bytes!("../assets/icon.png");
 
-pub fn show_notification(title: &str, body: &str, tag: &str) {
+pub fn get_registry_dword(key_name: &str) -> io::Result<u32> {
+    let hklm = RegKey::predef(HKEY_CURRENT_USER);
+    let key = hklm.open_subkey(NOTIFICATION_REGISTRY_PATH)?;
+    key.get_value(key_name)
+}
+
+pub fn set_registry_dword(key_name: &str, value: u32) -> io::Result<()> {
+    let hklm = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hklm.create_subkey(NOTIFICATION_REGISTRY_PATH)?;
+    key.set_value(key_name, &value)?;
+    Ok(())
+}
+
+fn get_title_display(level: LogLevel) -> &'static str {
+    match level {
+        LogLevel::INFO => "ℹ️ Info",
+        LogLevel::WARN => "⚠️ Warning",
+        LogLevel::ERROR => "⛔ ERROR",
+    }
+}
+
+pub fn show_notification(level: LogLevel, body: &str, tag: &str) {
+    debug_log(level, &format!("{} (tag: {})", body, tag), None);
+
+    if !CONFIG.notification {
+        return;
+    }
+
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
-    if title != WARN || check_notification_registry(tag, now, COOLDOWN_SECONDS) {
+
+    if !matches!(level, LogLevel::WARN) || check_notification_registry(tag, now, COOLDOWN_SECONDS) {
         let icon_path = env::temp_dir().join("playbridge_icon.png");
 
         if !icon_path.exists() {
@@ -31,9 +56,10 @@ pub fn show_notification(title: &str, body: &str, tag: &str) {
 
         let manager = ToastManager::new(AUM_ID);
         let mut toast = Toast::new();
+
         toast
             .tag(tag)
-            .text1(title)
+            .text1(get_title_display(level))
             .text2(winrt_toast::content::text::Text::new(body))
             .text3(winrt_toast::content::text::Text::new(format!("tag: {}", tag)).with_placement(TextPlacement::Attribution));
         toast.scenario(Scenario::Reminder);
@@ -55,26 +81,5 @@ fn check_notification_registry(tag: &str, now: u64, cooldown_seconds: u64) -> bo
             now - last_time >= cooldown_seconds
         }
         None => true,
-    }
-}
-
-pub fn check_and_update_resolution(width: u32, height: u32) {
-    let hklm = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hklm.create_subkey(NOTIFICATION_REGISTRY_PATH).expect("Failed to create or open registry key");
-
-    let stored_width: u32 = key.get_value("resolution_width").unwrap_or(0);
-    let stored_height: u32 = key.get_value("resolution_height").unwrap_or(0);
-
-    if stored_width != width || stored_height != height {
-        key.set_value("resolution_width", &width).expect("Failed to write width to registry");
-        key.set_value("resolution_height", &height).expect("Failed to write height to registry");
-
-        let (title, body, tag) = if stored_width == 0 || stored_height == 0 {
-            (INFO, &format!("Resolution info ({}x{})", width, height), "resolution_init")
-        } else {
-            (INFO, &format!("Resolution changed ({}x{})", width, height), "resolution_changed")
-        };
-
-        show_notification(title, body, tag);
     }
 }
