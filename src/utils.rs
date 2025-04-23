@@ -146,7 +146,7 @@ fn check_resolution(width: u32, height: u32) {
         return;
     }
 
-    if width < CONFIG.min_width || height < CONFIG.min_height {
+    if width < (1280.0 * 0.8) as u32 || height < (720.0 * 0.8) as u32 {
         show_notification(LogLevel::WARN, &format!("Resolution is too low ({}x{})", width, height), "resolution_too_low");
         return;
     }

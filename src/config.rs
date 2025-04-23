@@ -15,29 +15,15 @@ pub struct Config {
     pub width: u32,
     /// Resolution used when resizing images for MAA or for screenshot
     pub height: u32,
-    /// Minimum window resolution required for proper MAA recognition
-    pub min_width: u32,
-    /// Minimum window resolution required for proper MAA recognition
-    pub min_height: u32,
     /// Enable or disable debug logging
     pub debug: bool,
-    /// Enable or disable system notifications
+    /// Enable or disable notifications
     pub notification: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
-            title: "명일방주".into(),
-            package: "com.YoStarKR.Arknights".into(),
-            swipe_speed: 10,
-            width: 1280,
-            height: 720,
-            min_width: 1024, // 1280 * 0.8
-            min_height: 576, // 720  * 0.8
-            debug: false,
-            notification: true,
-        }
+        Self { title: "명일방주".into(), package: "com.YoStarKR.Arknights".into(), swipe_speed: 10, width: 1280, height: 720, debug: false, notification: true }
     }
 }
 
@@ -77,8 +63,6 @@ impl Config {
         cfg.swipe_speed = merge_u32(&v, "swipe_speed", || Config::default().swipe_speed);
         cfg.width = merge_u32(&v, "width", || Config::default().width);
         cfg.height = merge_u32(&v, "height", || Config::default().height);
-        cfg.min_width = merge_u32(&v, "min_width", || Config::default().width);
-        cfg.min_height = merge_u32(&v, "min_height", || Config::default().height);
         cfg.debug = merge_bool(&v, "debug", || Config::default().debug);
         cfg.notification = merge_bool(&v, "notification", || Config::default().notification);
 

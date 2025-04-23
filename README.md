@@ -1,5 +1,5 @@
 > [!Note]
-> This repository is a **customized fork** of [PlayBridge](https://github.com/ACK72/PlayBridge).
+> This repository is a **customized fork** of [PlayBridge](https://github.com/ACK72/PlayBridge)
 
 ### Setup
 
@@ -24,8 +24,6 @@ To enable custom settings, create a file named `PlayBridgeADB.json` in the same 
   "swipe_speed": 10,
   "width": 1280,
   "height": 720,
-  "min_width": 1024,
-  "min_height": 576,
   "debug": false,
   "notification": true
 }
@@ -43,10 +41,8 @@ To enable custom settings, create a file named `PlayBridgeADB.json` in the same 
 | `swipe_speed`  | Multiplier for swipe speed                                     |
 | `width`        | Resolution used when resizing images for MAA or for screenshot |
 | `height`       | **Should maintain a 16:9 aspect ratio**                        |
-| `min_width`    | Minimum window resolution required for proper MAA recognition  |
-| `min_height`   | **Should maintain a 16:9 aspect ratio**                        |
 | `debug`        | Enable or disable debug logging                                |
-| `notification` | Enable or disable system notifications                         |
+| `notification` | Enable or disable notifications                                |
 
 </details>
 
