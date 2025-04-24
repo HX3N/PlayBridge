@@ -30,6 +30,7 @@ enum Command {
     Connect,
     GetPropVersionRelease,
     StartActivity { intent: String },
+    Devices,
     DumpsysWindowDisplays,
     GetUUID,
     InputTap { x: i32, y: i32 },
@@ -51,6 +52,7 @@ fn parse_command(args: &[String]) -> Command {
         c if c.contains("connect") => Command::Connect,
         c if c.contains("getprop ro.build.version.release") => Command::GetPropVersionRelease,
         c if c.contains("am start -n") => Command::StartActivity { intent: args[7].clone() },
+        c if c.contains("devices") => Command::Devices,
         c if c.contains("input tap") => Command::InputTap { x: args[6].parse().unwrap(), y: args[7].parse().unwrap() },
         c if c.contains("input text") => Command::InputText { text: args[6..].join(" ") },
         c if c.contains("input swipe") => Command::InputSwipe {
@@ -69,8 +71,7 @@ fn parse_command(args: &[String]) -> Command {
             || c.contains("exec-out screencap | nc -w 3")
             || c.contains("exec-out screencap | gzip -1")
             || c.contains("start-server")
-            || c.contains("kill-server")
-            || c.contains("devices") =>
+            || c.contains("kill-server") =>
         {
             Command::IgnoreCommand
         }
@@ -94,6 +95,10 @@ fn execute_command(command: Command) {
         Command::StartActivity { intent } => {
             println!("Starting: Intent {{ cmp={} }}", intent);
             println!("Warning: Activity not started, intent has been delivered to currently running top-most instance.");
+        }
+        Command::Devices => {
+            println!("List of devices attached");
+            println!("GooglePlayGames\tdevice");
         }
         Command::DumpsysWindowDisplays => {
             println!("{} {}", CONFIG.width, CONFIG.height);

@@ -3,12 +3,15 @@
 
 ### Setup
 
-Download [PlayBridgeADB.exe](https://github.com/HX3N/PlayBridge/releases/latest) and place it inside the MAA folder.<br>
-Then, go to **MAA > Settings > Connection Settings** and configure as follows:
+> [!IMPORTANT]
+> **`Auto Reload`**<sup>debug</sup> will only work if the connection address is set as shown below 
 
-| ADB Path      | Connection Address | Input Method |
-| ------------- | ------------------ | ------------ |
-| PlayBridgeADB | 127.0.0.1:5000     | ADB Input    |
+Download [PlayBridgeADB.exe](https://github.com/HX3N/PlayBridge/releases/latest) and place it inside the MAA folder.<br>
+Then, go to **MAA > Settings > Connection** and configure as follows:
+
+| ADB path      | Connection address | Touch Mode |
+| ------------- | ------------------ | ---------- |
+| PlayBridgeADB | GooglePlayGames    | ADB Input  |
 
 ### Config
 
