@@ -4,9 +4,9 @@
 ### Setup
 
 > [!IMPORTANT]
-> **`Auto Reload`**<sup>debug</sup> will only work if the connection address is set as shown below 
+> Debug - **Auto Reload** will only work if the connection address is set as shown below
 
-Download [PlayBridgeADB.exe](https://github.com/HX3N/PlayBridge/releases/latest) and place it inside the MAA folder.<br>
+Download [PlayBridgeADB](https://github.com/HX3N/PlayBridge/releases/latest) and place it inside the MAA folder.<br>
 Then, go to **MAA > Settings > Connection** and configure as follows:
 
 | ADB path      | Connection address | Touch Mode |
@@ -18,7 +18,7 @@ Then, go to **MAA > Settings > Connection** and configure as follows:
 To enable custom settings, create a file named `PlayBridgeADB.json` in the same directory as the exe file.
 
 <details>
-  <summary><strong>Default <code>PlayBridgeADB.json</code></strong></summary>
+  <summary><strong>PlayBridgeADB.json</strong></summary>
 
 ```json
 {
@@ -31,11 +31,6 @@ To enable custom settings, create a file named `PlayBridgeADB.json` in the same 
   "notification": true
 }
 ```
-
-</details>
-
-<details>
-  <summary><strong>Descriptions of each key</strong></summary>
 
 | Key            | Description                                                    |
 | -------------- | -------------------------------------------------------------- |
