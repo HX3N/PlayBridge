@@ -9,6 +9,8 @@ pub struct Config {
     pub title: String,
     /// Arknights package name used to launch the game
     pub package: String,
+    /// Polling rate during swipe
+    pub polling_rate: u32,
     /// Multiplier for swipe speed
     pub swipe_speed: u32,
     /// Resolution used when resizing images for MAA or for screenshot
@@ -23,7 +25,9 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { title: "명일방주".into(), package: "com.YoStarKR.Arknights".into(), swipe_speed: 10, width: 1280, height: 720, debug: false, notification: true }
+        Self {
+            title: "명일방주".into(), package: "com.YoStarKR.Arknights".into(), polling_rate: 1000, swipe_speed: 10, width: 1280, height: 720, debug: false, notification: true
+        }
     }
 }
 
@@ -60,6 +64,7 @@ impl Config {
 
         cfg.title = merge_str(&v, "title", || Config::default().title.clone());
         cfg.package = merge_str(&v, "package", || Config::default().package.clone());
+        cfg.polling_rate = merge_u32(&v, "polling_rate", || Config::default().polling_rate);
         cfg.swipe_speed = merge_u32(&v, "swipe_speed", || Config::default().swipe_speed);
         cfg.width = merge_u32(&v, "width", || Config::default().width);
         cfg.height = merge_u32(&v, "height", || Config::default().height);

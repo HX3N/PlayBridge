@@ -31,23 +31,23 @@ pub fn debug_log(level: LogLevel, message: &str, elapsed_ms: Option<u128>) {
         return;
     }
 
-    if let Ok(mut file) = OpenOptions::new().append(true).create(true).open("PlayBridgeADB.log") {
-        let now = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
-        let prefix = match level {
-            LogLevel::INFO => "Info",
-            LogLevel::WARN => "Warn",
-            LogLevel::ERROR => "Error",
-        };
+    let Ok(mut file) = OpenOptions::new().append(true).create(true).open("PlayBridgeADB.log") else {
+        return;
+    };
 
-        match elapsed_ms {
-            Some(ms) => {
-                let _ = writeln!(file, "[{}][{}][{:>3}ms] {}", now, prefix, ms, message);
-            }
-            None => {
-                let _ = writeln!(file, "[{}][{}] {}", now, prefix, message);
-            }
-        }
-    }
+    let now = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+    let prefix = match level {
+        LogLevel::INFO => "INF",
+        LogLevel::WARN => "WRN",
+        LogLevel::ERROR => "ERR",
+    };
+
+    let log = match elapsed_ms {
+        Some(ms) => format!("[{}][{}] {} , cost {} ms", now, prefix, message, ms),
+        None => format!("[{}][{}] {}", now, prefix, message),
+    };
+
+    let _ = writeln!(file, "{}", log);
 }
 
 pub fn debug_panic() {
@@ -64,8 +64,8 @@ pub fn debug_panic() {
     }));
 }
 
-pub fn get_now() -> Instant {
-    Instant::now()
+pub fn get_now() -> Option<Instant> {
+    CONFIG.debug.then(Instant::now)
 }
 
 pub fn run_arknights() {
@@ -126,7 +126,7 @@ fn capture() -> DynamicImage {
 
 pub fn capture_maa() {
     let img = capture();
-    img.write_with_encoder(PngEncoder::new(&mut stdout().lock())).expect("Failedc to write image to stdout");
+    img.write_with_encoder(PngEncoder::new(&mut stdout().lock())).expect("Failed to write image to stdout");
 }
 
 pub fn capture_screenshot() {

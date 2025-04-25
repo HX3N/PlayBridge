@@ -9,8 +9,6 @@ use crate::{
 
 use windows::Win32::{Foundation::*, UI::WindowsAndMessaging::*};
 
-const POLLING_RATE: i32 = 1000 / 500;
-
 pub fn post_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) {
     unsafe { _ = PostMessageA(Some(hwnd), msg, wparam, lparam) };
 }
@@ -49,9 +47,12 @@ fn ease_out(t: f32) -> f32 {
 pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
     let (hwnd, w, h) = get_info();
 
+    let effective_duration = duration as f32 / CONFIG.swipe_speed as f32;
+    let steps = (effective_duration / 1000.0 * CONFIG.polling_rate as f32).ceil() as u32;
+    let sleep_nanos = 1_000_000_000u64 / CONFIG.polling_rate as u64;
+
     let dx = (x2 - x1) as f32;
     let dy = (y2 - y1) as f32;
-    let steps = ((duration as f32 / CONFIG.swipe_speed as f32) / POLLING_RATE as f32).ceil() as i32;
 
     let pos_down = get_relative_point(x1, y1, w, h);
     post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos_down));
@@ -64,11 +65,11 @@ pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
 
         let pos = get_relative_point(nx, ny, w, h);
         post_message(hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos));
-        spin_sleep::sleep(Duration::new(0, POLLING_RATE as u32 * 1_000_000));
+        spin_sleep::sleep(Duration::new(0, sleep_nanos as u32));
     }
 
     let pos_up = get_relative_point(x2, y2, w, h);
-    spin_sleep::sleep(Duration::new(0, (POLLING_RATE * 5) as u32 * 1_000_000));
+    spin_sleep::sleep(Duration::new(0, sleep_nanos as u32 * 5));
     post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos_up));
     post_message(hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(pos_up));
 }

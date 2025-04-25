@@ -37,7 +37,7 @@ fn get_title_display(level: LogLevel) -> &'static str {
 }
 
 pub fn show_notification(level: LogLevel, body: &str, tag: &str) {
-    debug_log(level, &format!("{} (tag: {})", body, tag), None);
+    debug_log(level, &format!("{} , tag: {}", body, tag), None);
 
     if !CONFIG.notification {
         return;

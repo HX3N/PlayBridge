@@ -24,6 +24,7 @@ To enable custom settings, create a file named `PlayBridgeADB.json` in the same 
 {
   "title": "명일방주",
   "package": "com.YoStarKR.Arknights",
+  "polling_rate": 1000,
   "swipe_speed": 10,
   "width": 1280,
   "height": 720,
@@ -36,6 +37,7 @@ To enable custom settings, create a file named `PlayBridgeADB.json` in the same 
 | -------------- | -------------------------------------------------------------- |
 | `title`        | Window title pattern used to locate the game window            |
 | `package`      | Arknights package name used to launch the game                 |
+| `polling_rate` | Polling rate during swipe                                      |
 | `swipe_speed`  | Multiplier for swipe speed                                     |
 | `width`        | Resolution used when resizing images for MAA or for screenshot |
 | `height`       | **Should maintain a 16:9 aspect ratio**                        |

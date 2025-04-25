@@ -22,7 +22,9 @@ fn main() {
     let command = parse_command(&args);
     execute_command(command);
 
-    debug_log(LogLevel::INFO, &args.join(" "), Some(start.elapsed().as_millis()));
+    if let Some(start) = start {
+        debug_log(LogLevel::INFO, &args.join(" "), Some(start.elapsed().as_millis()));
+    }
 }
 
 enum Command {
