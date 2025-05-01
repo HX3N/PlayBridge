@@ -26,11 +26,7 @@ pub enum LogLevel {
     ERROR,
 }
 
-pub fn debug_log(level: LogLevel, message: &str, elapsed_ms: Option<u128>) {
-    if !CONFIG.debug {
-        return;
-    }
-
+fn write_log(level: LogLevel, message: &str, elapsed_ms: Option<u128>) {
     let Ok(mut file) = OpenOptions::new().append(true).create(true).open("PlayBridgeADB.log") else {
         return;
     };
@@ -50,17 +46,20 @@ pub fn debug_log(level: LogLevel, message: &str, elapsed_ms: Option<u128>) {
     let _ = writeln!(file, "{}", log);
 }
 
-pub fn debug_panic() {
+pub fn debug_log(level: LogLevel, message: &str, elapsed_ms: Option<u128>) {
     if !CONFIG.debug {
         return;
     }
+    write_log(level, message, elapsed_ms);
+}
 
+pub fn debug_panic() {
     panic::set_hook(Box::new(|info| {
         let msg = info.payload().downcast_ref::<&str>().map(|s| *s).or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str())).unwrap_or("Unknown panic message");
 
         let location = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_else(|| "unknown location".into());
 
-        debug_log(LogLevel::ERROR, &format!("PANIC at {}: {}", location, msg), None);
+        write_log(LogLevel::ERROR, &format!("PANIC at {}: {}", location, msg), None);
     }));
 }
 
