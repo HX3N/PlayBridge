@@ -3,8 +3,7 @@
 
 ### Setup
 
-> [!IMPORTANT]
-> Debug - **Auto Reload** will only work if the connection address is set as shown below
+> **Auto Reload** will only work if the connection address is set as shown below
 
 Download [PlayBridgeADB](https://github.com/HX3N/PlayBridge/releases/latest) and place it inside the MAA folder.<br>
 Then, go to **MAA > Settings > Connection** and configure as follows:
