@@ -47,10 +47,9 @@ fn write_log(level: LogLevel, message: &str, elapsed_ms: Option<u128>) {
 }
 
 pub fn debug_log(level: LogLevel, message: &str, elapsed_ms: Option<u128>) {
-    if !CONFIG.debug {
-        return;
+    if CONFIG.debug {
+        write_log(level, message, elapsed_ms);
     }
-    write_log(level, message, elapsed_ms);
 }
 
 pub fn debug_panic() {
@@ -74,7 +73,7 @@ pub fn run_arknights() {
 
     let _ = open::that(format!("googleplaygames://launch/?id={}", CONFIG.package));
 
-    let found = (0..30).find(|_| {
+    let found = (0..60).find(|_| {
         thread::sleep(Duration::from_secs(1));
         get_hwnd().is_some()
     });
@@ -86,7 +85,7 @@ pub fn run_arknights() {
 }
 
 pub fn get_hwnd() -> Option<HWND> {
-    let pattern = format!("^{}( - .+)?$", CONFIG.title);
+    let pattern = format!("^{}( - .+)?$", CONFIG.title); // Player ID
     let re = Regex::new(&pattern).unwrap();
 
     let window = window_list().expect("Failed to window_list").into_iter().find(|i| re.is_match(&i.window_name));
