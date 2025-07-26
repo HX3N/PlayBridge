@@ -106,7 +106,7 @@ fn execute_command(command: Command) {
             println!("{} {}", CONFIG.width, CONFIG.height);
         }
         Command::GetUUID => {
-            println!("googleplaygames");
+            println!("c0ffeeee"); // ^[0-9a-fA-F]{8,}$
         }
         // =========================================
         Command::InputTap { x, y } => {
