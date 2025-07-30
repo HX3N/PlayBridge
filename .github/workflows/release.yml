@@ -1,4 +1,4 @@
-name: PlayBridge ADB
+name: release PlayBridgeADB
 
 on:
   push:

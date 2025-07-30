@@ -41,6 +41,7 @@ enum Command {
     InputKeyEvent { keycode: i32 },
     ExecOutScreencap,
     ForceStop,
+    Echo { text: String },
     IgnoreCommand,
     Unknown(String),
 }
@@ -69,6 +70,7 @@ fn parse_command(args: &[String]) -> Command {
         c if c.contains("exec-out screencap -p") => Command::ExecOutScreencap,
         c if c.contains("am force-stop") || c.contains("input keyevent HOME") => Command::ForceStop,
         c if c.contains("settings get secure android_id") => Command::GetUUID,
+        c if c.contains("shell echo") => Command::Echo { text: args[5..].join(" ") }, // Connection Preset - Compatible Mode
         c if c.contains("cat /proc/net/arp")
             || c.contains("exec-out screencap | nc -w 3")
             || c.contains("exec-out screencap | gzip -1")
@@ -128,9 +130,12 @@ fn execute_command(command: Command) {
             input::terminate();
             show_notification(LogLevel::INFO, "Arknights shutdown", "shutdown_arknights");
         }
+        Command::Echo { text } => {
+            println!("{}", text);
+        }
         Command::IgnoreCommand => {}
         Command::Unknown(cmd) => {
-            debug_log(LogLevel::ERROR, &format!("Unknown command: {}", cmd), None);
+            write_log(LogLevel::ERROR, &format!("Unknown command: {}", cmd), None);
             show_notification(LogLevel::ERROR, &format!("Unknown command!\n{}", cmd), "unknown_command");
         }
     }

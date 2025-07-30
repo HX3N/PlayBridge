@@ -26,7 +26,7 @@ pub enum LogLevel {
     ERROR,
 }
 
-fn write_log(level: LogLevel, message: &str, elapsed_ms: Option<u128>) {
+pub fn write_log(level: LogLevel, message: &str, elapsed_ms: Option<u128>) {
     let Ok(mut file) = OpenOptions::new().append(true).create(true).open("PlayBridgeADB.log") else {
         return;
     };
