@@ -4,14 +4,13 @@ use std::{
 };
 
 use crate::utils::*;
-use crate::CONFIG;
 use winreg::{enums::*, RegKey};
 use winrt_toast::{content::text::TextPlacement, register, Scenario, Toast, ToastManager};
 
-pub const NOTIFICATION_REGISTRY_PATH: &str = r"Software\PlayBridge ADB";
+pub const NOTIFICATION_REGISTRY_PATH: &str = r"Software\PlayBridge";
 const COOLDOWN_SECONDS: u64 = 20;
-const AUM_ID: &str = "PlayBridge ADB";
-const DISPLAY_NAME: &str = "PlayBridge ADB";
+const AUM_ID: &str = "PlayBridge";
+const DISPLAY_NAME: &str = "PlayBridge";
 
 const ICON_DATA: &[u8] = include_bytes!("../assets/icon.png");
 
@@ -28,20 +27,22 @@ pub fn set_registry_dword(key_name: &str, value: u32) -> io::Result<()> {
     Ok(())
 }
 
-fn get_title_display(level: LogLevel) -> &'static str {
-    match level {
+fn get_title_display(level: LogLevel) -> String {
+    let base_text = match level {
         LogLevel::INFO => "ℹ️ Info",
         LogLevel::WARN => "⚠️ Warning",
         LogLevel::ERROR => "⛔ ERROR",
+    };
+
+    if is_debug_enabled() {
+        format!("{} 🛠️", base_text)
+    } else {
+        base_text.to_string()
     }
 }
 
 pub fn show_notification(level: LogLevel, body: &str, tag: &str) {
     debug_log(level, &format!("{} , tag: {}", body, tag), None);
-
-    if !CONFIG.notification {
-        return;
-    }
 
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 

@@ -2,6 +2,10 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::fs;
 
+pub const DISPLAY_WIDTH: u32 = 1280;
+pub const DISPLAY_HEIGHT: u32 = 720;
+pub const EXTRAS_PORT: u16 = 50505;
+
 #[derive(Deserialize, Debug)]
 #[serde(default)]
 pub struct Config {
@@ -9,25 +13,17 @@ pub struct Config {
     pub title: String,
     /// Arknights package name used to launch the game
     pub package: String,
-    /// Polling rate during swipe
-    pub polling_rate: u32,
     /// Multiplier for swipe speed
     pub swipe_speed: u32,
-    /// Resolution used when resizing images for MAA or for screenshot
-    pub width: u32,
-    /// Resolution used when resizing images for MAA or for screenshot
-    pub height: u32,
     /// Enable or disable debug logging
     pub debug: bool,
-    /// Enable or disable notifications
-    pub notification: bool,
+    /// Enable or disable debug capture
+    pub debug_capture: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
-            title: "명일방주".into(), package: "com.YoStarKR.Arknights".into(), polling_rate: 1000, swipe_speed: 10, width: 1280, height: 720, debug: false, notification: true
-        }
+        Self { title: "명일방주".into(), package: "com.YoStarKR.Arknights".into(), swipe_speed: 10, debug: false, debug_capture: false }
     }
 }
 
@@ -64,16 +60,13 @@ impl Config {
 
         cfg.title = merge_str(&v, "title", || Config::default().title.clone());
         cfg.package = merge_str(&v, "package", || Config::default().package.clone());
-        cfg.polling_rate = merge_u32(&v, "polling_rate", || Config::default().polling_rate);
         cfg.swipe_speed = merge_u32(&v, "swipe_speed", || Config::default().swipe_speed);
-        cfg.width = merge_u32(&v, "width", || Config::default().width);
-        cfg.height = merge_u32(&v, "height", || Config::default().height);
         cfg.debug = merge_bool(&v, "debug", || Config::default().debug);
-        cfg.notification = merge_bool(&v, "notification", || Config::default().notification);
+        cfg.debug_capture = merge_bool(&v, "debug_capture", || Config::default().debug_capture);
 
         cfg
     }
 }
 
 use once_cell::sync::Lazy;
-pub static CONFIG: Lazy<Config> = Lazy::new(|| Config::load_from_file("PlayBridgeADB.json"));
+pub static CONFIG: Lazy<Config> = Lazy::new(|| Config::load_from_file("PlayBridge/config.json"));

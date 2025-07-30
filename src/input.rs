@@ -2,9 +2,11 @@ use std::{thread, time::Duration};
 
 use spin_sleep;
 
+const POLLING_RATE: u32 = 1000;
+
 use crate::{
-    config::CONFIG,
-    utils::{get_hwnd, get_info},
+    config::{CONFIG, DISPLAY_HEIGHT, DISPLAY_WIDTH},
+    utils::{capture_debug, get_hwnd, get_info, invalidate_cache_image},
 };
 
 use windows::Win32::{Foundation::*, UI::WindowsAndMessaging::*};
@@ -14,16 +16,25 @@ pub fn post_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) {
 }
 
 fn get_relative_point(x: i32, y: i32, w: i32, h: i32) -> isize {
-    let nx = (x as f32 / CONFIG.width as f32 * w as f32).ceil() as isize;
-    let ny = (y as f32 / CONFIG.height as f32 * h as f32).ceil() as isize;
+    let nx = (x as f32 / DISPLAY_WIDTH as f32 * w as f32).round() as isize;
+    let ny = (y as f32 / DISPLAY_HEIGHT as f32 * h as f32).round() as isize;
     ny << 16 | nx
 }
 
 pub fn input_tap(x: i32, y: i32) {
+    capture_debug(x, y, None);
+
     let (hwnd, w, h) = get_info();
     let pos = get_relative_point(x, y, w, h);
+
     post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos));
+    thread::sleep(Duration::from_millis(10));
+
     post_message(hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(pos));
+    thread::sleep(Duration::from_millis(10));
+
+    invalidate_cache_image();
+    thread::sleep(Duration::from_millis(50));
 }
 
 pub fn input_text(text: &str) {
@@ -48,8 +59,8 @@ pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
     let (hwnd, w, h) = get_info();
 
     let effective_duration = duration as f32 / CONFIG.swipe_speed as f32;
-    let steps = (effective_duration / 1000.0 * CONFIG.polling_rate as f32).ceil() as u32;
-    let sleep_nanos = 1_000_000_000u64 / CONFIG.polling_rate as u64;
+    let steps = (effective_duration / 1000.0 * POLLING_RATE as f32).ceil() as u32;
+    let sleep_nanos = 1_000_000_000u64 / POLLING_RATE as u64;
 
     let dx = (x2 - x1) as f32;
     let dy = (y2 - y1) as f32;
@@ -65,12 +76,18 @@ pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
 
         let pos = get_relative_point(nx, ny, w, h);
         post_message(hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos));
+
+        if cnt == (steps as f32 * 0.9).round() as u32 {
+            capture_debug(x1, y1, Some((x2, y2)));
+        }
+
         spin_sleep::sleep(Duration::new(0, sleep_nanos as u32));
     }
 
     let pos_up = get_relative_point(x2, y2, w, h);
-    spin_sleep::sleep(Duration::new(0, sleep_nanos as u32 * 5));
+
     post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos_up));
+    thread::sleep(Duration::from_millis(10));
     post_message(hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(pos_up));
 }
 

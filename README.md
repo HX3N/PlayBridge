@@ -3,54 +3,59 @@
 
 ### Setup
 
-> **Auto Reload** will only work if the connection address is set as shown below
+> The **Auto Reload** feature in MAA Debug mode will only work if the connection address is set as shown below
 
-Download [PlayBridgeADB](https://github.com/HX3N/PlayBridge/releases/latest) and place it inside the MAA folder.<br>
+Download [PlayBridgeADB](https://github.com/HX3N/PlayBridge/releases/latest) and place it inside the MAA folder<br>
 Then, go to **MAA > Settings > Connection** and configure as follows:
 
-| ADB path      | Connection address | Touch Mode |
-| ------------- | ------------------ | ---------- |
-| PlayBridgeADB | GooglePlayGames    | ADB Input  |
+<div align="center">
+
+![img](./assets/readme.png)
+
+| ADB path      | Connection address | Connection Preset       | Touch Mode |
+| ------------- | ------------------ | ----------------------- | ---------- |
+| PlayBridgeADB | GooglePlayGames    | General/Compatible Mode | ADB Input  |
+
+</div>
 
 ### Config
 
-To enable custom settings, create a file named `PlayBridgeADB.json` in the same directory as the exe file.
+To enable custom settings, create a `PlayBridge` folder in the same directory as the exe file and create a `config.json` file
 
 <details>
-  <summary><strong>PlayBridgeADB.json</strong></summary>
+  <summary><strong>config.json</strong></summary>
 
 ```json
 {
+  // Default values
   "title": "명일방주",
   "package": "com.YoStarKR.Arknights",
-  "polling_rate": 1000,
   "swipe_speed": 10,
-  "width": 1280,
-  "height": 720,
   "debug": false,
-  "notification": true
+  "debug_capture": false
 }
 ```
 
-| Key            | Description                                                    |
-| -------------- | -------------------------------------------------------------- |
-| `title`        | Window title pattern used to locate the game window            |
-| `package`      | Arknights package name used to launch the game                 |
-| `polling_rate` | Polling rate during swipe                                      |
-| `swipe_speed`  | Multiplier for swipe speed                                     |
-| `width`        | Resolution used when resizing images for MAA or for screenshot |
-| `height`       | **Should maintain a 16:9 aspect ratio**                        |
-| `debug`        | Enable or disable debug logging                                |
-| `notification` | Enable or disable notifications                                |
+<div align="center">
 
+| Key             | Description                     |
+| --------------- | :------------------------------ |
+| `title`         | Window title (server)           |
+| `package`       | Arknights package name (server) |
+| `swipe_speed`   | Swipe speed multiplier          |
+| `debug`         | debug logging                   |
+| `debug_capture` | debug capture                   |
+
+</div>
 </details>
 
 ### Screenshot
 
-Running the executable directly captures a screenshot of **Google Play Games Beta** and saves it to the Desktop.<br>
-The image resolution follows the `width` / `height` settings.
+Running the executable directly captures a screenshot of **Google Play Games** and saves it to the Desktop
 
-### Notification
+### Extras (Test)
 
-Displays Windows toast notifications for events.<br>
-Used to inform the user when something goes wrong or when key actions succeed or fail.
+> To activate it, place the `PlayBridgeExtras` in the same directory as the `PlayBridgeADB`
+
+PlayBridgeExtras can improve the screenshot time, but it consumes more CPU<br>
+If Google Play Games is closed or the 45 seconds have passed, Extras will automatically exit

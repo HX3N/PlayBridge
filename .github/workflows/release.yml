@@ -1,4 +1,4 @@
-name: release PlayBridgeADB
+name: release PlayBridge
 
 on:
   push:
@@ -38,27 +38,21 @@ jobs:
 
       - name: Build
         run: cargo build --release --verbose
+        env:
+          PLAYBRIDGE_VERSION: v${{ steps.version_tag.outputs.VERSION }}
 
       - name: List build directory
         run: dir target\release\
 
-      - name: Create release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create release and upload assets
+        uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ steps.version_tag.outputs.VERSION }}
-          release_name: v${{ steps.version_tag.outputs.VERSION }}
+          name: v${{ steps.version_tag.outputs.VERSION }}
+          files: |
+            target/release/PlayBridgeADB.exe
+            target/release/PlayBridgeExtras.exe
           draft: false
           prerelease: false
-
-      - name: Upload release assets
-        uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: target/release/PlayBridgeADB.exe
-          asset_name: PlayBridgeADB.exe
-          asset_content_type: application/octet-stream
