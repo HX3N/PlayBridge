@@ -10,7 +10,7 @@ use std::{
 };
 use std::{thread, time::Duration};
 
-use image::{codecs::png::PngEncoder, imageops::FilterType::Nearest, DynamicImage, Rgb, RgbaImage};
+use image::{codecs::png::PngEncoder, imageops::FilterType::CatmullRom, DynamicImage, Rgb, RgbaImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut};
 use regex::Regex;
 
@@ -163,7 +163,7 @@ pub fn capture() -> DynamicImage {
     let height = buf.height;
 
     let img = DynamicImage::ImageRgba8(RgbaImage::from_raw(width, height, buf.pixels).expect("Failed to create RgbaImage"));
-    img.resize(DISPLAY_WIDTH, DISPLAY_HEIGHT, Nearest)
+    img.resize(DISPLAY_WIDTH, DISPLAY_HEIGHT, CatmullRom)
 }
 
 pub fn capture_maa() {
