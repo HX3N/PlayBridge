@@ -5,8 +5,8 @@ use spin_sleep;
 const POLLING_RATE: u32 = 1000;
 
 use crate::{
-    config::{CONFIG, DISPLAY_HEIGHT, DISPLAY_WIDTH},
-    utils::{capture_debug, get_hwnd, get_info, invalidate_cache_image},
+    config::{get_config, DISPLAY_HEIGHT, DISPLAY_WIDTH},
+    utils::{capture_debug, get_hwnd, get_info, invalidate_extras_image},
 };
 
 use windows::Win32::{Foundation::*, UI::WindowsAndMessaging::*};
@@ -29,12 +29,9 @@ pub fn input_tap(x: i32, y: i32) {
 
     post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos));
     thread::sleep(Duration::from_millis(10));
-
     post_message(hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(pos));
-    thread::sleep(Duration::from_millis(10));
 
-    invalidate_cache_image();
-    thread::sleep(Duration::from_millis(50));
+    invalidate_extras_image();
 }
 
 pub fn input_text(text: &str) {
@@ -58,7 +55,7 @@ fn ease_out(t: f32) -> f32 {
 pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
     let (hwnd, w, h) = get_info();
 
-    let effective_duration = duration as f32 / CONFIG.swipe_speed as f32;
+    let effective_duration = duration as f32 / get_config().swipe_speed as f32;
     let steps = (effective_duration / 1000.0 * POLLING_RATE as f32).ceil() as u32;
     let sleep_nanos = 1_000_000_000u64 / POLLING_RATE as u64;
 

@@ -52,6 +52,7 @@ jobs:
           files: |
             target/release/PlayBridgeADB.exe
             target/release/PlayBridgeExtras.exe
+            PlayBridgeConfig.bat
           draft: false
           prerelease: false
         env:

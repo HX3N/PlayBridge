@@ -20,34 +20,20 @@ Then, go to **MAA > Settings > Connection** and configure as follows:
 
 ### Config
 
-To enable custom settings, create a `PlayBridge` folder in the same directory as the exe file and create a `config.json` file
-
-<details>
-  <summary><strong>config.json</strong></summary>
-
-```json
-{
-  // Default values
-  "title": "명일방주",
-  "package": "com.YoStarKR.Arknights",
-  "swipe_speed": 10,
-  "debug": false,
-  "debug_capture": false
-}
-```
+To enable custom settings, run `PlayBridgeConfig.bat` and change the values<br>
+Or, you can change the registry values directly in `Software\PlayBridge\config`
 
 <div align="center">
 
-| Key             | Description                     |
-| --------------- | :------------------------------ |
-| `title`         | Window title (server)           |
-| `package`       | Arknights package name (server) |
-| `swipe_speed`   | Swipe speed multiplier          |
-| `debug`         | debug logging                   |
-| `debug_capture` | debug capture                   |
+| Variable        | Description                     | Default                |
+| --------------- | :------------------------------ | ---------------------- |
+| `TITLE`         | Window title (server)           | 명일방주               |
+| `PACKAGE`       | Arknights package name (server) | com.YoStarKR.Arknights |
+| `SWIPE_SPEED`   | Swipe speed multiplier          | 10                     |
+| `DEBUG`         | debug logging                   | false                  |
+| `DEBUG_CAPTURE` | debug capture                   | false                  |
 
 </div>
-</details>
 
 ### Screenshot
 

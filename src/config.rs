@@ -1,13 +1,14 @@
-use serde::Deserialize;
-use serde_json::Value;
-use std::fs;
+use once_cell::sync::Lazy;
+use std::sync::{Arc, RwLock};
+use winreg::{enums::*, types::FromRegValue, RegKey};
 
 pub const DISPLAY_WIDTH: u32 = 1280;
 pub const DISPLAY_HEIGHT: u32 = 720;
 pub const EXTRAS_PORT: u16 = 50505;
 
-#[derive(Deserialize, Debug)]
-#[serde(default)]
+const REG_PATH_CONFIG: &str = r"Software\PlayBridge\config";
+const REG_PATH_NOTIFICATION: &str = r"Software\PlayBridge\notification";
+
 pub struct Config {
     /// Window title pattern used to locate the game window
     pub title: String,
@@ -21,52 +22,51 @@ pub struct Config {
     pub debug_capture: bool,
 }
 
+fn get_reg_value<T>(key_name: &str, default_value: T) -> T
+where
+    T: FromRegValue + 'static,
+{
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hkcu.create_subkey(REG_PATH_CONFIG).unwrap();
+    key.get_value(key_name).unwrap_or(default_value)
+}
+
 impl Default for Config {
     fn default() -> Self {
-        Self { title: "명일방주".into(), package: "com.YoStarKR.Arknights".into(), swipe_speed: 10, debug: false, debug_capture: false }
+        Self {
+            title: get_reg_value("TITLE", "명일방주".to_string()),
+            package: get_reg_value("PACKAGE", "com.YoStarKR.Arknights".to_string()),
+            swipe_speed: get_reg_value("SWIPE_SPEED", 10u32),
+            debug: get_reg_value("DEBUG", 0u32) != 0,
+            debug_capture: get_reg_value("DEBUG_CAPTURE", 0u32) != 0,
+        }
     }
 }
 
-fn merge_str<F>(v: &Value, key: &str, default: F) -> String
-where
-    F: FnOnce() -> String,
-{
-    v.get(key).and_then(Value::as_str).map(ToString::to_string).unwrap_or_else(default)
+pub fn get_registry_dword(key_name: &str) -> std::io::Result<u32> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let key = hkcu.open_subkey(REG_PATH_NOTIFICATION)?;
+    key.get_value(key_name)
 }
 
-fn merge_u32<F>(v: &Value, key: &str, default: F) -> u32
-where
-    F: FnOnce() -> u32,
-{
-    v.get(key).and_then(|val| val.as_u64().map(|i| i as u32)).unwrap_or_else(default)
+pub fn set_registry_dword(key_name: &str, value: u32) -> std::io::Result<()> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hkcu.create_subkey(REG_PATH_NOTIFICATION)?;
+    key.set_value(key_name, &value)?;
+    Ok(())
 }
 
-fn merge_bool<F>(v: &Value, key: &str, default: F) -> bool
-where
-    F: FnOnce() -> bool,
-{
-    v.get(key).and_then(Value::as_bool).unwrap_or_else(default)
+pub static CONFIG: Lazy<Arc<RwLock<Config>>> = Lazy::new(|| Arc::new(RwLock::new(Config::default())));
+
+pub fn get_config() -> std::sync::RwLockReadGuard<'static, Config> {
+    CONFIG.read().unwrap()
 }
 
 impl Config {
-    pub fn load_from_file(path: &str) -> Self {
-        let raw = match fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(_) => return Self::default(),
-        };
-
-        let v: Value = serde_json::from_str(&raw).unwrap_or_default();
-        let mut cfg = Config::default();
-
-        cfg.title = merge_str(&v, "title", || Config::default().title.clone());
-        cfg.package = merge_str(&v, "package", || Config::default().package.clone());
-        cfg.swipe_speed = merge_u32(&v, "swipe_speed", || Config::default().swipe_speed);
-        cfg.debug = merge_bool(&v, "debug", || Config::default().debug);
-        cfg.debug_capture = merge_bool(&v, "debug_capture", || Config::default().debug_capture);
-
-        cfg
+    #[allow(dead_code)]
+    pub fn reload() {
+        let new_config = Config::default();
+        let mut config_guard = CONFIG.write().unwrap();
+        *config_guard = new_config;
     }
 }
-
-use once_cell::sync::Lazy;
-pub static CONFIG: Lazy<Config> = Lazy::new(|| Config::load_from_file("PlayBridge/config.json"));

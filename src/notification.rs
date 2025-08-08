@@ -1,31 +1,17 @@
 use std::{
-    env, fs, io,
+    env, fs,
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::config::{get_config, get_registry_dword, set_registry_dword};
 use crate::utils::*;
-use winreg::{enums::*, RegKey};
 use winrt_toast::{content::text::TextPlacement, register, Scenario, Toast, ToastManager};
 
-pub const NOTIFICATION_REGISTRY_PATH: &str = r"Software\PlayBridge";
 const COOLDOWN_SECONDS: u64 = 20;
 const AUM_ID: &str = "PlayBridge";
 const DISPLAY_NAME: &str = "PlayBridge";
 
 const ICON_DATA: &[u8] = include_bytes!("../assets/icon.png");
-
-pub fn get_registry_dword(key_name: &str) -> io::Result<u32> {
-    let hklm = RegKey::predef(HKEY_CURRENT_USER);
-    let key = hklm.open_subkey(NOTIFICATION_REGISTRY_PATH)?;
-    key.get_value(key_name)
-}
-
-pub fn set_registry_dword(key_name: &str, value: u32) -> io::Result<()> {
-    let hklm = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hklm.create_subkey(NOTIFICATION_REGISTRY_PATH)?;
-    key.set_value(key_name, &value)?;
-    Ok(())
-}
 
 fn get_title_display(level: LogLevel) -> String {
     let base_text = match level {
@@ -34,7 +20,7 @@ fn get_title_display(level: LogLevel) -> String {
         LogLevel::ERROR => "⛔ ERROR",
     };
 
-    if is_debug_enabled() {
+    if get_config().debug {
         format!("{} 🛠️", base_text)
     } else {
         base_text.to_string()
@@ -67,20 +53,13 @@ pub fn show_notification(level: LogLevel, body: &str, tag: &str) {
 
         manager.show(&toast).expect("Failed to show toast");
 
-        let hklm = RegKey::predef(HKEY_CURRENT_USER);
-        let (key, _) = hklm.create_subkey(NOTIFICATION_REGISTRY_PATH).expect("Failed to create or open registry key");
-        key.set_value(tag, &now).expect("Failed to write to registry");
+        set_registry_dword(tag, now as u32).expect("Failed to write to registry");
     }
 }
 
 fn check_notification_registry(tag: &str, now: u64, cooldown_seconds: u64) -> bool {
-    let hklm = RegKey::predef(HKEY_CURRENT_USER);
-    let key = hklm.open_subkey_with_flags(NOTIFICATION_REGISTRY_PATH, KEY_READ).ok();
-    match key {
-        Some(key) => {
-            let last_time: u64 = key.get_value(tag).unwrap_or(0);
-            now - last_time >= cooldown_seconds
-        }
-        None => true,
+    match get_registry_dword(tag) {
+        Ok(last_time) => now - last_time as u64 >= cooldown_seconds,
+        Err(_) => true,
     }
 }

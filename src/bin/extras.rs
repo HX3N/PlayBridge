@@ -95,6 +95,7 @@ fn main() {
         match listener.accept() {
             Ok((mut stream, _addr)) => {
                 *last_cmd.lock().unwrap() = Instant::now();
+                config::Config::reload();
 
                 // Read command
                 let mut cmd_buf = [0u8; 3];

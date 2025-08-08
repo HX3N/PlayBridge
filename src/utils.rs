@@ -14,8 +14,8 @@ use image::{codecs::png::PngEncoder, imageops::FilterType::Nearest, DynamicImage
 use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut};
 use regex::Regex;
 
-use crate::config::{CONFIG, DISPLAY_HEIGHT, DISPLAY_WIDTH, EXTRAS_PORT};
-use crate::notification::{get_registry_dword, set_registry_dword, show_notification};
+use crate::config::{get_config, get_registry_dword, set_registry_dword, DISPLAY_HEIGHT, DISPLAY_WIDTH, EXTRAS_PORT};
+use crate::notification::show_notification;
 
 use std::fs::OpenOptions;
 use std::panic;
@@ -35,26 +35,26 @@ pub enum LogLevel {
 
 // ============================================================================
 
-pub fn run_arknights() {
+pub fn start_arknights() {
     if get_hwnd().is_some() {
         return;
     }
 
-    let _ = open::that(format!("googleplaygames://launch/?id={}", CONFIG.package));
+    let _ = open::that(format!("googleplaygames://launch/?id={}", get_config().package));
 
-    let found = (0..50).find(|_| {
+    let found = (0..45).find(|_| {
         thread::sleep(Duration::from_secs(1));
         get_hwnd().is_some()
     });
 
     if found.is_none() {
-        show_notification(LogLevel::WARN, "Failed to launch Arknights or detect window", "start_arknights_failed");
-        panic!("Failed to launch Arknights or detect its window within timeout");
+        show_notification(LogLevel::WARN, &format!("Failed to start Arknights or detect window\ntarget title: {}", get_config().title), "start_arknights_failed");
+        panic!("Failed to start Arknights or detect its window within timeout");
     }
 }
 
 pub fn get_hwnd() -> Option<HWND> {
-    let pattern = format!("^{}( - .+)?$", CONFIG.title); // Player ID
+    let pattern = format!("^{}( - .+)?$", get_config().title); // Player ID
     let re = Regex::new(&pattern).unwrap();
 
     let window = window_list().expect("Failed to window_list").into_iter().find(|i| re.is_match(&i.window_name));
@@ -73,27 +73,41 @@ pub fn get_info() -> (HWND, i32, i32) {
 
 // ============================================================================
 
-fn fetch_cached_or_spawn() -> std::io::Result<Vec<u8>> {
-    for _ in 0..3 {
-        if let Ok(data) = get_cached_image() {
-            return Ok(data);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-
-    let _ = spawn_cache_process();
-    std::thread::sleep(std::time::Duration::from_millis(500));
-
-    for _ in 0..3 {
-        if let Ok(data) = get_cached_image() {
-            return Ok(data);
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
-    get_cached_image()
+fn extras_app_exists() -> bool {
+    let mut path: PathBuf = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    path.set_file_name("PlayBridgeExtras.exe");
+    path.exists()
 }
 
-fn get_cached_image() -> std::io::Result<Vec<u8>> {
+fn try_use_extras_image() -> bool {
+    if !extras_app_exists() {
+        return false;
+    }
+
+    let image_data_result = 'block: {
+        for _ in 0..50 {
+            if let Ok(data) = request_extras_image() {
+                break 'block Ok(data);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        request_extras_image()
+    };
+
+    if let Ok(data) = image_data_result {
+        if stdout().lock().write_all(&data).is_ok() {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn request_extras_image() -> std::io::Result<Vec<u8>> {
     let mut stream = TcpStream::connect(format!("127.0.0.1:{}", EXTRAS_PORT))?;
     stream.write_all(b"GET")?;
     stream.shutdown(Shutdown::Write)?;
@@ -103,14 +117,29 @@ fn get_cached_image() -> std::io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-pub fn invalidate_cache_image() {
+pub fn invalidate_extras_image() {
+    if !extras_app_exists() {
+        return;
+    }
+
+    // Input tap - wait for load next frame
+    thread::sleep(Duration::from_millis(100));
+
     if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", EXTRAS_PORT)) {
         let _ = stream.write_all(b"INV");
         let _ = stream.shutdown(Shutdown::Write);
     }
 }
 
-fn spawn_cache_process() -> std::io::Result<()> {
+pub fn spawn_extras_process() -> std::io::Result<()> {
+    if !extras_app_exists() {
+        return Ok(());
+    }
+
+    if let Ok(_) = TcpStream::connect(format!("127.0.0.1:{}", EXTRAS_PORT)) {
+        return Ok(());
+    }
+
     let mut path: PathBuf = std::env::current_exe()?;
     path.set_file_name("PlayBridgeExtras.exe");
 
@@ -141,14 +170,11 @@ pub fn capture_maa() {
     let (_, w, h) = get_info();
     check_window_size(w as u32, h as u32);
 
-    let path = std::env::current_exe().unwrap().parent().unwrap().join("PlayBridgeExtras.exe");
+    let _ = spawn_extras_process();
 
     // Extras
-    if path.exists() {
-        if let Ok(data) = fetch_cached_or_spawn() {
-            let _ = stdout().lock().write_all(&data);
-            return;
-        }
+    if try_use_extras_image() {
+        return;
     }
 
     // fallback
@@ -166,7 +192,7 @@ pub fn capture_screenshot() {
 }
 
 pub fn capture_debug(x: i32, y: i32, end_point: Option<(i32, i32)>) {
-    if !CONFIG.debug_capture {
+    if !get_config().debug_capture {
         return;
     }
 
@@ -209,16 +235,8 @@ fn get_debug_folder() -> PathBuf {
     folder_path
 }
 
-pub fn update_debug_flag(enabled: bool) {
-    let _ = set_registry_dword("debug_enabled", if enabled { 1 } else { 0 });
-}
-
-pub fn is_debug_enabled() -> bool {
-    get_registry_dword("debug_enabled").unwrap_or(0) != 0
-}
-
 pub fn debug_log(level: LogLevel, message: &str, elapsed_ms: Option<u128>) {
-    if !is_debug_enabled() {
+    if !get_config().debug && !matches!(level, LogLevel::ERROR) {
         return;
     }
 
@@ -305,7 +323,7 @@ fn get_folder_size(folder_path: &PathBuf) -> u64 {
 }
 
 pub fn check_debug_folder_size() {
-    if !is_debug_enabled() && !CONFIG.debug_capture {
+    if !get_config().debug && !get_config().debug_capture {
         return;
     }
 
