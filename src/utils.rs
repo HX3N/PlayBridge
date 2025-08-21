@@ -123,7 +123,7 @@ pub fn invalidate_extras_image() {
     }
 
     // Input tap - wait for load next frame
-    thread::sleep(Duration::from_millis(100));
+    thread::sleep(Duration::from_millis(200));
 
     if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", EXTRAS_PORT)) {
         let _ = stream.write_all(b"INV");
