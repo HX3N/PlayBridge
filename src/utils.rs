@@ -1,25 +1,25 @@
 use chrono::Local;
 use open;
-use std::net::{Shutdown, TcpStream};
-use std::process::Command;
 use std::{
     env,
     ffi::c_void,
-    fs::File,
+    fs::{File, OpenOptions},
     io::{stdout, Read, Write},
+    net::{Shutdown, TcpStream},
+    panic,
+    path::PathBuf,
+    process::Command,
+    thread,
+    time::Duration,
 };
-use std::{thread, time::Duration};
 
 use image::{codecs::png::PngEncoder, imageops::FilterType::CatmullRom, DynamicImage, Rgb, RgbaImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut};
 use regex::Regex;
 
-use crate::config::{get_config, get_registry_dword, set_registry_dword, DISPLAY_HEIGHT, DISPLAY_WIDTH, EXTRAS_PORT};
-use crate::notification::show_notification;
+use crate::config::{config, get_registry_dword, set_registry_dword, DISPLAY_HEIGHT, DISPLAY_WIDTH, EXTRAS_PORT};
+use crate::notification::display_notification;
 
-use std::fs::OpenOptions;
-use std::panic;
-use std::path::PathBuf;
 use win_screenshot::prelude::*;
 use windows::Win32::{
     Foundation::{HWND, RECT},
@@ -35,29 +35,44 @@ pub enum LogLevel {
 
 // ============================================================================
 
+fn get_title_pattern() -> String {
+    format!("^{}( - .+)?$", config().title)
+}
+
 pub fn start_arknights() {
     if get_hwnd().is_some() {
         return;
     }
 
-    let _ = open::that(format!("googleplaygames://launch/?id={}", get_config().package));
+    let _ = open::that(format!("googleplaygames://launch/?id={}", config().package));
 
-    let found = (0..45).find(|_| {
+    let found = (0..10).find(|_| {
         thread::sleep(Duration::from_secs(1));
         get_hwnd().is_some()
     });
 
     if found.is_none() {
-        show_notification(LogLevel::WARN, &format!("Failed to start Arknights or detect window\ntarget title: {}", get_config().title), "start_arknights_failed");
-        panic!("Failed to start Arknights or detect its window within timeout");
+        let gpg_pattern = r"^Google Play .+";
+        let re = Regex::new(gpg_pattern).unwrap();
+
+        let gpg_window = window_list().unwrap().into_iter().find(|i| re.is_match(&i.window_name));
+
+        if gpg_window.is_some() {
+            debug_log(LogLevel::INFO, "Google Play Games is still loading", None);
+            return;
+        } else {
+            let pattern = get_title_pattern();
+            display_notification(LogLevel::ERROR, "gpg_start_failed", &[&pattern]);
+            panic!("Failed to start Google Play Games or detect\nTarget regex: {}\nPackage: {}", pattern, config().package);
+        }
     }
 }
 
 pub fn get_hwnd() -> Option<HWND> {
-    let pattern = format!("^{}( - .+)?$", get_config().title); // Player ID
+    let pattern = get_title_pattern(); // Title - Player ID
     let re = Regex::new(&pattern).unwrap();
 
-    let window = window_list().expect("Failed to window_list").into_iter().find(|i| re.is_match(&i.window_name));
+    let window = window_list().unwrap().into_iter().find(|i| re.is_match(&i.window_name));
 
     window.map(|w| HWND(w.hwnd as usize as *mut c_void))
 }
@@ -73,7 +88,9 @@ pub fn get_info() -> (HWND, i32, i32) {
 
 // ============================================================================
 
-fn extras_app_exists() -> bool {
+const EXTRAS_TIMEOUT: u64 = 50;
+
+fn extras_exists() -> bool {
     let mut path: PathBuf = match std::env::current_exe() {
         Ok(p) => p,
         Err(_) => return false,
@@ -82,61 +99,8 @@ fn extras_app_exists() -> bool {
     path.exists()
 }
 
-fn try_use_extras_image() -> bool {
-    if !extras_app_exists() {
-        return false;
-    }
-
-    let image_data_result = 'block: {
-        for _ in 0..50 {
-            if let Ok(data) = request_extras_image() {
-                break 'block Ok(data);
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-
-        request_extras_image()
-    };
-
-    if let Ok(data) = image_data_result {
-        if stdout().lock().write_all(&data).is_ok() {
-            return true;
-        }
-    }
-
-    false
-}
-
-fn request_extras_image() -> std::io::Result<Vec<u8>> {
-    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", EXTRAS_PORT))?;
-    stream.write_all(b"GET")?;
-    stream.shutdown(Shutdown::Write)?;
-
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf)?;
-    Ok(buf)
-}
-
-pub fn invalidate_extras_image() {
-    if !extras_app_exists() {
-        return;
-    }
-
-    // Input tap - wait for load next frame
-    thread::sleep(Duration::from_millis(200));
-
-    if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", EXTRAS_PORT)) {
-        let _ = stream.write_all(b"INV");
-        let _ = stream.shutdown(Shutdown::Write);
-    }
-}
-
-pub fn spawn_extras_process() -> std::io::Result<()> {
-    if !extras_app_exists() {
-        return Ok(());
-    }
-
-    if let Ok(_) = TcpStream::connect(format!("127.0.0.1:{}", EXTRAS_PORT)) {
+fn spawn_extras_process() -> std::io::Result<()> {
+    if let Ok(_) = TcpStream::connect_timeout(&format!("127.0.0.1:{}", EXTRAS_PORT).parse().unwrap(), Duration::from_millis(EXTRAS_TIMEOUT)) {
         return Ok(());
     }
 
@@ -146,53 +110,90 @@ pub fn spawn_extras_process() -> std::io::Result<()> {
     Command::new(path).spawn().map(|_| ())
 }
 
+fn request_extras_image() -> bool {
+    if !extras_exists() {
+        return false;
+    }
+
+    let mut stream = match TcpStream::connect_timeout(&format!("127.0.0.1:{}", EXTRAS_PORT).parse().unwrap(), Duration::from_millis(EXTRAS_TIMEOUT)) {
+        Ok(stream) => stream,
+        Err(_) => return false,
+    };
+
+    stream.write_all(b"GET").unwrap();
+    stream.shutdown(Shutdown::Write).unwrap();
+
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).unwrap();
+    stdout().lock().write_all(&buf).unwrap();
+
+    !buf.is_empty() // return
+}
+
+pub fn invalidate_extras_image() {
+    if !extras_exists() {
+        return;
+    }
+
+    // Input tap - wait for load next frame
+    thread::sleep(Duration::from_millis(150));
+
+    if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", EXTRAS_PORT)) {
+        stream.write_all(b"INV").unwrap();
+        stream.shutdown(Shutdown::Write).unwrap();
+    }
+}
+
 // ============================================================================
 
 pub fn capture() -> DynamicImage {
     let hwnd = get_hwnd().unwrap();
 
     if unsafe { IsIconic(hwnd).as_bool() } {
-        show_notification(LogLevel::WARN, "Minimized window is not supported", "minimized_not_supported");
+        display_notification(LogLevel::WARN, "window_minimized", &[]);
         unsafe { _ = ShowWindow(hwnd, SW_RESTORE) };
         thread::sleep(Duration::from_millis(300));
     }
 
-    let buf = capture_window_ex(hwnd.0 as isize, Using::PrintWindow, Area::ClientOnly, None, None).expect("Failed to capture_window_ex");
+    let buf = capture_window_ex(hwnd.0 as isize, Using::PrintWindow, Area::ClientOnly, None, None).unwrap();
 
     let width = buf.width;
     let height = buf.height;
 
-    let img = DynamicImage::ImageRgba8(RgbaImage::from_raw(width, height, buf.pixels).expect("Failed to create RgbaImage"));
+    let img = DynamicImage::ImageRgba8(RgbaImage::from_raw(width, height, buf.pixels).unwrap());
+
     img.resize(DISPLAY_WIDTH, DISPLAY_HEIGHT, CatmullRom)
 }
 
-pub fn capture_maa() {
+pub fn send_capture() {
     let (_, w, h) = get_info();
     check_window_size(w as u32, h as u32);
 
-    let _ = spawn_extras_process();
+    if extras_exists() {
+        spawn_extras_process().unwrap();
+    }
 
     // Extras
-    if try_use_extras_image() {
+    if request_extras_image() {
         return;
     }
 
     // fallback
     let img = capture();
-    img.write_with_encoder(PngEncoder::new(&mut stdout().lock())).expect("Failed to write image to stdout");
+    img.write_with_encoder(PngEncoder::new(&mut stdout().lock())).unwrap();
 }
 
-pub fn capture_screenshot() {
+pub fn screenshot() {
     let img = capture();
     let filename = format!("Screenshot_{}.png", Local::now().format("%Y.%m.%d_%H.%M.%S.%3f"));
     let filepath = format!("{}\\Desktop\\{}", env::var("USERPROFILE").unwrap(), filename);
-    img.write_with_encoder(PngEncoder::new(File::create(&filepath).unwrap())).expect("Failed to write image to screenshot");
+    img.write_with_encoder(PngEncoder::new(File::create(&filepath).unwrap())).unwrap();
 
-    show_notification(LogLevel::INFO, "Screenshot saved!", "screenshot_saved");
+    display_notification(LogLevel::INFO, "screenshot", &[]);
 }
 
-pub fn capture_debug(x: i32, y: i32, end_point: Option<(i32, i32)>) {
-    if !get_config().debug_capture {
+pub fn debug_capture(x: i32, y: i32, end_point: Option<(i32, i32)>) {
+    if !config().debug_capture {
         return;
     }
 
@@ -223,7 +224,7 @@ pub fn capture_debug(x: i32, y: i32, end_point: Option<(i32, i32)>) {
     let filepath = get_debug_folder().join(filename);
 
     let dynamic_img = DynamicImage::ImageRgb8(img_rgb);
-    dynamic_img.write_with_encoder(PngEncoder::new(File::create(&filepath).unwrap())).expect("Failed to write debug image (capture_debug)");
+    dynamic_img.write_with_encoder(PngEncoder::new(File::create(&filepath).unwrap())).unwrap();
 }
 
 // ============================================================================
@@ -236,7 +237,7 @@ fn get_debug_folder() -> PathBuf {
 }
 
 pub fn debug_log(level: LogLevel, message: &str, elapsed_ms: Option<u128>) {
-    if !get_config().debug && !matches!(level, LogLevel::ERROR) {
+    if !config().debug && !matches!(level, LogLevel::ERROR) {
         return;
     }
 
@@ -270,13 +271,13 @@ pub fn debug_log(level: LogLevel, message: &str, elapsed_ms: Option<u128>) {
     let _ = writeln!(file, "{}", log);
 }
 
-pub fn debug_panic() {
+pub fn panic_hook() {
     panic::set_hook(Box::new(|info| {
         let msg = info.payload().downcast_ref::<&str>().map(|s| *s).or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str())).unwrap_or("Unknown panic message");
 
         let location = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_else(|| "unknown location".into());
 
-        debug_log(LogLevel::ERROR, &format!("PANIC at {}: {}", location, msg), None);
+        display_notification(LogLevel::ERROR, "panic", &[&location, msg]);
     }));
 }
 
@@ -284,26 +285,27 @@ fn check_window_size(width: u32, height: u32) {
     let ratio = height as f32 / width as f32;
     let target_ratio = 9.0 / 16.0;
     if (ratio - target_ratio).abs() > 0.001 {
-        show_notification(LogLevel::WARN, &format!("Aspect ratio is not 16:9 (16:{:.1})", ratio * 16.0), "not_16_9_ratio");
+        let display_ratio = ratio * 16.0;
+        display_notification(LogLevel::WARN, "wrong_ratio", &[&format!("{:.1}", display_ratio)]);
         return;
     }
 
     if width < (DISPLAY_WIDTH as f32 * 0.8) as u32 || height < (DISPLAY_HEIGHT as f32 * 0.8) as u32 {
-        show_notification(LogLevel::WARN, &format!("Window size is too low ({}x{})", width, height), "window_size_too_low");
+        display_notification(LogLevel::WARN, "window_too_small", &[&width.to_string(), &height.to_string()]);
         return;
     }
 
-    let stored_width = get_registry_dword("width").unwrap_or(0);
-    let stored_height = get_registry_dword("height").unwrap_or(0);
+    let stored_width = get_registry_dword("width", &config().notification_path).unwrap_or(0);
+    let stored_height = get_registry_dword("height", &config().notification_path).unwrap_or(0);
 
     if stored_width != width || stored_height != height {
-        set_registry_dword("width", width).expect("Failed to write width to registry");
-        set_registry_dword("height", height).expect("Failed to write height to registry");
+        set_registry_dword("width", width, &config().notification_path).unwrap();
+        set_registry_dword("height", height, &config().notification_path).unwrap();
 
         if stored_width == 0 || stored_height == 0 {
-            show_notification(LogLevel::INFO, &format!("Window size info ({}x{})", width, height), "window_size_init");
+            display_notification(LogLevel::INFO, "window_info", &[&width.to_string(), &height.to_string()]);
         } else {
-            show_notification(LogLevel::INFO, &format!("Window size changed ({}x{})", width, height), "window_size_changed");
+            display_notification(LogLevel::INFO, "window_changed", &[&width.to_string(), &height.to_string()]);
         }
     }
 }
@@ -322,31 +324,30 @@ fn get_folder_size(folder_path: &PathBuf) -> u64 {
     total_size / (1024 * 1024) // MB
 }
 
-pub fn check_debug_folder_size() {
-    if !get_config().debug && !get_config().debug_capture {
+pub fn check_folder_size() {
+    if !config().debug && !config().debug_capture {
         return;
     }
 
-    const WARNING_INTERVAL: u64 = 100; // 100MB
+    const WARNING_INTERVAL: u64 = 250; // 250MB
 
     let debug_folder = get_debug_folder();
     let current = get_folder_size(&debug_folder);
 
     if current < WARNING_INTERVAL {
-        if get_registry_dword("debug_folder_last_warned_size").unwrap_or(0) != 0 {
-            let _ = set_registry_dword("debug_folder_last_warned_size", 0);
+        if get_registry_dword("debug_folder_last_warned_size", &config().notification_path).unwrap_or(0) != 0 {
+            set_registry_dword("debug_folder_last_warned_size", 0, &config().notification_path).unwrap();
         }
         return;
     }
 
-    let last_warned = get_registry_dword("debug_folder_last_warned_size").unwrap_or(0) as u64;
+    let last_warned = get_registry_dword("debug_folder_last_warned_size", &config().notification_path).unwrap_or(0) as u64;
 
     let current_level = current / WARNING_INTERVAL;
     let last_warned_level = last_warned / WARNING_INTERVAL;
 
     if current_level > last_warned_level {
-        show_notification(LogLevel::WARN, &format!("PlayBridge folder size is {}MB!\nPlease be careful of high storage usage", current), "high_storage_usage");
-
-        let _ = set_registry_dword("debug_folder_last_warned_size", current as u32);
+        display_notification(LogLevel::WARN, "storage_warning", &[&current.to_string()]);
+        set_registry_dword("debug_folder_last_warned_size", current as u32, &config().notification_path).unwrap();
     }
 }

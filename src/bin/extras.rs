@@ -1,13 +1,14 @@
 #![allow(dead_code)]
 
-use std::io::{Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::{
+    io::{Read, Write},
+    net::{Shutdown, TcpListener, TcpStream},
+    sync::{Arc, Mutex},
+    thread,
+    time::{Duration, Instant},
+};
 
-use image::codecs::png::PngEncoder;
-use image::{ColorType, ImageEncoder};
+use image::{codecs::png::PngEncoder, ColorType, ImageEncoder};
 
 #[path = "../config.rs"]
 mod config;
@@ -16,16 +17,15 @@ mod notification;
 #[path = "../utils.rs"]
 mod utils;
 
-use config::EXTRAS_PORT;
-use notification::show_notification;
+use config::{config, Config, EXTRAS_PORT};
+use notification::display_notification;
 use utils::{capture, debug_log, get_hwnd, LogLevel};
 
 const EXTRAS_TIMEOUT: u64 = 45;
 
 fn main() {
-    show_notification(LogLevel::INFO, "Starting Extras!", "extras_start");
+    debug_log(LogLevel::INFO, "Starting Extras", None);
 
-    // If the target window is not found, exit
     if get_hwnd().is_none() {
         debug_log(LogLevel::ERROR, "Target window not found, exiting", None);
         return;
@@ -54,33 +54,65 @@ fn main() {
         let frame_sequence = Arc::clone(&frame_sequence);
         let should_exit = Arc::clone(&should_exit);
 
-        thread::spawn(move || loop {
-            if get_hwnd().is_none() {
-                debug_log(LogLevel::INFO, "Target window not found - window closed or unavailable", None);
-                *should_exit.lock().unwrap() = true;
-                break;
-            }
+        thread::spawn(move || {
+            let mut frame_count = 0;
+            let mut last_log_time = Instant::now();
+            let mut last_frame_time = Instant::now();
 
-            if last_cmd.lock().unwrap().elapsed() > Duration::from_secs(EXTRAS_TIMEOUT) {
-                debug_log(LogLevel::INFO, "Command timeout exceeded - no commands received", None);
-                *should_exit.lock().unwrap() = true;
-                break;
-            }
+            loop {
+                if get_hwnd().is_none() {
+                    debug_log(LogLevel::INFO, "Target window not founded, exiting", None);
+                    *should_exit.lock().unwrap() = true;
+                    break;
+                }
 
-            let img = capture();
-            let rgba = img.into_rgba8();
-            let (w, h) = (rgba.width(), rgba.height());
-            let raw = rgba.into_raw();
+                if last_cmd.lock().unwrap().elapsed() > Duration::from_secs(EXTRAS_TIMEOUT) {
+                    debug_log(LogLevel::INFO, "Command timeout exceeded, exiting", None);
+                    *should_exit.lock().unwrap() = true;
+                    break;
+                }
 
-            let seq = {
-                let mut seq_guard = frame_sequence.lock().unwrap();
-                *seq_guard += 1;
-                *seq_guard
-            };
+                // FPS limit
+                Config::reload();
+                let max_fps = config().max_fps;
+                let target_frame_duration = Duration::from_millis(1000 / max_fps as u64);
+                let elapsed_since_last_frame = last_frame_time.elapsed();
 
-            {
-                let mut guard = latest_frame.lock().unwrap();
-                *guard = Some((raw, w, h, seq));
+                if elapsed_since_last_frame < target_frame_duration {
+                    let sleep_duration = target_frame_duration - elapsed_since_last_frame;
+                    thread::sleep(sleep_duration);
+                }
+                last_frame_time = Instant::now();
+
+                let img = capture();
+                let rgba = img.into_rgba8();
+                let (w, h) = (rgba.width(), rgba.height());
+                let raw = rgba.into_raw();
+
+                let seq = {
+                    let mut seq_guard = frame_sequence.lock().unwrap();
+                    *seq_guard += 1;
+                    *seq_guard
+                };
+
+                {
+                    let mut guard = latest_frame.lock().unwrap();
+                    *guard = Some((raw, w, h, seq));
+                }
+
+                frame_count += 1;
+                let now = Instant::now();
+                let elapsed = now.duration_since(last_log_time);
+
+                if elapsed >= Duration::from_secs(1) {
+                    if config().debug {
+                        let fps = frame_count as f32 / elapsed.as_secs_f32();
+                        let max_fps = config().max_fps;
+                        debug_log(LogLevel::INFO, &format!("Capture FPS: {:.2}/{}", fps, max_fps), None);
+                    }
+                    frame_count = 0;
+                    last_log_time = now;
+                }
             }
         });
     }
@@ -88,14 +120,14 @@ fn main() {
     // Request
     loop {
         if *should_exit.lock().unwrap() {
-            show_notification(LogLevel::INFO, "Stopping Extras...", "extras_stop");
+            display_notification(LogLevel::INFO, "extras_stop", &[]);
             break;
         }
 
         match listener.accept() {
             Ok((mut stream, _addr)) => {
                 *last_cmd.lock().unwrap() = Instant::now();
-                config::Config::reload();
+                Config::reload();
 
                 // Read command
                 let mut cmd_buf = [0u8; 3];

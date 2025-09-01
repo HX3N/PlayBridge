@@ -16,10 +16,15 @@ pub struct Config {
     pub package: String,
     /// Multiplier for swipe speed
     pub swipe_speed: u32,
+    /// Maximum FPS for Extras capture
+    #[allow(dead_code)]
+    pub max_fps: u32,
     /// Enable or disable debug logging
     pub debug: bool,
     /// Enable or disable debug capture
     pub debug_capture: bool,
+
+    pub notification_path: String,
 }
 
 fn get_reg_value<T>(key_name: &str, default_value: T) -> T
@@ -37,28 +42,30 @@ impl Default for Config {
             title: get_reg_value("TITLE", "명일방주".to_string()),
             package: get_reg_value("PACKAGE", "com.YoStarKR.Arknights".to_string()),
             swipe_speed: get_reg_value("SWIPE_SPEED", 10u32),
+            max_fps: get_reg_value("MAX_FPS", 10u32),
             debug: get_reg_value("DEBUG", 0u32) != 0,
             debug_capture: get_reg_value("DEBUG_CAPTURE", 0u32) != 0,
+            notification_path: REG_PATH_NOTIFICATION.to_string(),
         }
     }
 }
 
-pub fn get_registry_dword(key_name: &str) -> std::io::Result<u32> {
+pub fn get_registry_dword(key_name: &str, path: &str) -> std::io::Result<u32> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let key = hkcu.open_subkey(REG_PATH_NOTIFICATION)?;
+    let key = hkcu.open_subkey(path)?;
     key.get_value(key_name)
 }
 
-pub fn set_registry_dword(key_name: &str, value: u32) -> std::io::Result<()> {
+pub fn set_registry_dword(key_name: &str, value: u32, path: &str) -> std::io::Result<()> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hkcu.create_subkey(REG_PATH_NOTIFICATION)?;
+    let (key, _) = hkcu.create_subkey(path)?;
     key.set_value(key_name, &value)?;
     Ok(())
 }
 
 pub static CONFIG: Lazy<Arc<RwLock<Config>>> = Lazy::new(|| Arc::new(RwLock::new(Config::default())));
 
-pub fn get_config() -> std::sync::RwLockReadGuard<'static, Config> {
+pub fn config() -> std::sync::RwLockReadGuard<'static, Config> {
     CONFIG.read().unwrap()
 }
 

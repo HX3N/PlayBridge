@@ -1,12 +1,13 @@
-use std::{thread, time::Duration};
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 
 use spin_sleep;
 
-const POLLING_RATE: u32 = 1000;
-
 use crate::{
-    config::{get_config, DISPLAY_HEIGHT, DISPLAY_WIDTH},
-    utils::{capture_debug, get_hwnd, get_info, invalidate_extras_image},
+    config::{config, DISPLAY_HEIGHT, DISPLAY_WIDTH},
+    utils::{debug_capture, get_hwnd, get_info, invalidate_extras_image},
 };
 
 use windows::Win32::{Foundation::*, UI::WindowsAndMessaging::*};
@@ -22,7 +23,7 @@ fn get_relative_point(x: i32, y: i32, w: i32, h: i32) -> isize {
 }
 
 pub fn input_tap(x: i32, y: i32) {
-    capture_debug(x, y, None);
+    debug_capture(x, y, None);
 
     let (hwnd, w, h) = get_info();
     let pos = get_relative_point(x, y, w, h);
@@ -42,48 +43,58 @@ pub fn input_text(text: &str) {
     }
 }
 
-fn ease_out(t: f32) -> f32 {
-    if t < 0.8 {
-        t / 0.8
+fn ease_in_out(t: f32) -> f32 {
+    if t < 0.5 {
+        4.0 * t * t * t
     } else {
-        let start = 1.0;
-        let v0 = 1.0 / 0.8;
-        start + v0 * (t - 0.8) - v0 * (t - 0.8).powi(2) / (2.0 * 0.2)
+        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
     }
 }
 
 pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
     let (hwnd, w, h) = get_info();
 
-    let effective_duration = duration as f32 / get_config().swipe_speed as f32;
-    let steps = (effective_duration / 1000.0 * POLLING_RATE as f32).ceil() as u32;
-    let sleep_nanos = 1_000_000_000u64 / POLLING_RATE as u64;
+    let effective_duration = Duration::from_millis((duration as f32 / config().swipe_speed as f32).max(1.0) as u64);
+    let start_time = Instant::now();
 
     let dx = (x2 - x1) as f32;
     let dy = (y2 - y1) as f32;
 
     let pos_down = get_relative_point(x1, y1, w, h);
     post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos_down));
+    thread::sleep(Duration::from_millis(10));
 
-    for cnt in 0..=steps {
-        let progress = cnt as f32 / steps as f32;
-        let eased = ease_out(progress).min(1.0);
+    let mut last_pos = pos_down;
+    let mut debug_captured = false;
 
-        let (nx, ny) = if cnt == steps { (x2, y2) } else { (x1 + (dx * eased).round() as i32, y1 + (dy * eased).round() as i32) };
-
-        let pos = get_relative_point(nx, ny, w, h);
-        post_message(hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos));
-
-        if cnt == (steps as f32 * 0.9).round() as u32 {
-            capture_debug(x1, y1, Some((x2, y2)));
+    loop {
+        let elapsed = start_time.elapsed();
+        if elapsed >= effective_duration {
+            break;
         }
 
-        spin_sleep::sleep(Duration::new(0, sleep_nanos as u32));
+        let progress = elapsed.as_secs_f32() / effective_duration.as_secs_f32();
+        let eased_progress = ease_in_out(progress);
+
+        let nx = x1 + (dx * eased_progress).round() as i32;
+        let ny = y1 + (dy * eased_progress).round() as i32;
+
+        let pos = get_relative_point(nx, ny, w, h);
+        if pos != last_pos {
+            post_message(hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos));
+            last_pos = pos;
+        }
+
+        if !debug_captured && progress >= 0.9 {
+            debug_capture(x1, y1, Some((x2, y2)));
+            debug_captured = true;
+        }
+
+        spin_sleep::sleep(Duration::from_millis(1));
     }
 
     let pos_up = get_relative_point(x2, y2, w, h);
-
-    post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos_up));
+    post_message(hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos_up));
     thread::sleep(Duration::from_millis(10));
     post_message(hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(pos_up));
 }

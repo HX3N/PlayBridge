@@ -1,5 +1,6 @@
 > [!Note]
-> This repository is a **customized fork** of [PlayBridge](https://github.com/ACK72/PlayBridge)
+> This repository is a **customized fork** of [PlayBridge](https://github.com/ACK72/PlayBridge)  
+> For general use, the original one is recommended
 
 ### Setup
 
@@ -30,6 +31,7 @@ Or, you can change the registry values directly in `Software\PlayBridge\config`
 | `TITLE`         | Window title (server)           | 명일방주               |
 | `PACKAGE`       | Arknights package name (server) | com.YoStarKR.Arknights |
 | `SWIPE_SPEED`   | Swipe speed multiplier          | 10                     |
+| `MAX_FPS`       | Maximum FPS for Extras capture  | 10                     |
 | `DEBUG`         | debug logging                   | false                  |
 | `DEBUG_CAPTURE` | debug capture                   | false                  |
 

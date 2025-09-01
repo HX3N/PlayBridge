@@ -1,24 +1,22 @@
 mod config;
 mod input;
 mod notification;
-use std::time::Instant;
+use std::{env, time::Instant};
 mod utils;
 
-use std::env;
-
-use crate::config::{get_config, Config, DISPLAY_HEIGHT, DISPLAY_WIDTH};
-use notification::show_notification;
+use crate::config::{config, Config, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use notification::display_notification;
 use utils::*;
 
 #[ctor::ctor]
 fn init() {
-    debug_panic();
+    panic_hook();
 }
 
 fn main() {
     Config::default();
 
-    let start = get_config().debug.then(Instant::now);
+    let start = config().debug.then(Instant::now);
     start_arknights();
 
     let args: Vec<String> = env::args().collect();
@@ -29,7 +27,7 @@ fn main() {
         debug_log(LogLevel::INFO, &args.join(" "), Some(start.elapsed().as_millis()));
     }
 
-    check_debug_folder_size();
+    check_folder_size();
 }
 
 enum Command {
@@ -91,8 +89,7 @@ fn parse_command(args: &[String]) -> Command {
 fn execute_command(command: Command) {
     match command {
         Command::Empty => {
-            capture_screenshot();
-            show_notification(LogLevel::INFO, "Screenshot saved to desktop!", "screenshot_saved");
+            screenshot();
         }
         // ========= MAA needs this output =========
         Command::Connect => {
@@ -110,7 +107,7 @@ fn execute_command(command: Command) {
             println!("GooglePlayGames\tdevice\n");
 
             let version = option_env!("PLAYBRIDGE_VERSION").unwrap_or("local");
-            let config = get_config();
+            let config = config();
 
             println!("------------ PlayBridge Config ------------");
             println!("Version {}", version);
@@ -137,19 +134,18 @@ fn execute_command(command: Command) {
             input::input_keyevent(keycode);
         }
         Command::ExecOutScreencap => {
-            capture_maa();
+            send_capture();
         }
         Command::ForceStop => {
             input::terminate();
-            show_notification(LogLevel::INFO, "Arknights shutdown", "shutdown_arknights");
+            display_notification(LogLevel::INFO, "gpg_shutdown", &[]);
         }
         Command::Echo { text } => {
             println!("{}", text);
         }
         Command::IgnoreCommand => {}
         Command::Unknown(cmd) => {
-            debug_log(LogLevel::ERROR, &format!("Unknown command: {}", cmd), None);
-            show_notification(LogLevel::ERROR, &format!("Unknown command!\n{}", cmd), "unknown_command");
+            display_notification(LogLevel::ERROR, "unknown_cmd", &[&cmd]);
         }
     }
 }
