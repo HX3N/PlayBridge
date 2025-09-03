@@ -28,6 +28,7 @@ pub fn input_tap(x: i32, y: i32) {
     let (hwnd, w, h) = get_info();
     let pos = get_relative_point(x, y, w, h);
 
+    post_message(hwnd, WM_CANCELMODE, WPARAM(0), LPARAM(0));
     post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos));
     thread::sleep(Duration::from_millis(10));
     post_message(hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(pos));
@@ -61,6 +62,7 @@ pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
     let dy = (y2 - y1) as f32;
 
     let pos_down = get_relative_point(x1, y1, w, h);
+    post_message(hwnd, WM_CANCELMODE, WPARAM(0), LPARAM(0));
     post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos_down));
     thread::sleep(Duration::from_millis(10));
 
