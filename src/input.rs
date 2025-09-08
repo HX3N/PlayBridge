@@ -37,7 +37,7 @@ pub fn input_tap(x: i32, y: i32) {
 }
 
 pub fn input_text(text: &str) {
-    let hwnd = get_hwnd().unwrap();
+    let hwnd = get_hwnd().expect("Failed to find window (input_text)");
     for ch in text.chars() {
         post_message(hwnd, WM_CHAR, WPARAM(ch as usize), LPARAM(0));
         thread::sleep(Duration::from_millis(50));
@@ -102,7 +102,7 @@ pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
 }
 
 pub fn input_keyevent(keycode: i32) {
-    let hwnd = get_hwnd().unwrap();
+    let hwnd = get_hwnd().expect("Failed to find window (input_keyevent)");
     let wparam = WPARAM(keycode as usize);
     let down = LPARAM((keycode << 16) as isize);
     let up = LPARAM((keycode << 16 | 1 << 30 | 1 << 31) as isize);
@@ -111,6 +111,6 @@ pub fn input_keyevent(keycode: i32) {
 }
 
 pub fn terminate() {
-    let hwnd = get_hwnd().unwrap();
+    let hwnd = get_hwnd().expect("Failed to find window (terminate)");
     post_message(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
 }

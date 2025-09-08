@@ -78,7 +78,7 @@ pub fn get_hwnd() -> Option<HWND> {
 }
 
 pub fn get_info() -> (HWND, i32, i32) {
-    let hwnd = get_hwnd().unwrap();
+    let hwnd = get_hwnd().expect("Failed to find window (get_info)");
     let mut rect = RECT::default();
 
     let (w, h) = if unsafe { GetClientRect(hwnd, &mut rect) }.is_ok() { (rect.right - rect.left, rect.bottom - rect.top) } else { (0, 0) };
@@ -147,7 +147,7 @@ pub fn invalidate_extras_image() {
 // ============================================================================
 
 pub fn capture() -> DynamicImage {
-    let hwnd = get_hwnd().unwrap();
+    let hwnd = get_hwnd().expect("Failed to find window (capture)");
 
     if unsafe { IsIconic(hwnd).as_bool() } {
         display_notification(LogLevel::WARN, "window_minimized", &[]);
