@@ -4,8 +4,6 @@
 
 ### Setup
 
-> The **Auto Reload** feature in MAA Debug mode will only work if the connection address is set as shown below
-
 Download [PlayBridgeADB](https://github.com/HX3N/PlayBridge/releases/latest) and place it inside the MAA folder<br>
 Then, go to **MAA > Settings > Connection** and configure as follows:
 
@@ -45,5 +43,4 @@ Running the executable directly captures a screenshot of **Google Play Games** a
 
 > To activate it, place the `PlayBridgeExtras` in the same directory as the `PlayBridgeADB`
 
-PlayBridgeExtras can improve the screenshot time, but it consumes more CPU<br>
-If Google Play Games is closed or the 45 seconds have passed, Extras will automatically exit
+PlayBridgeExtras can improve the screenshot time, but it consumes more CPU
