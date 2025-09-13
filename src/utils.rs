@@ -282,11 +282,10 @@ pub fn panic_hook() {
 }
 
 fn check_window_size(width: u32, height: u32) {
-    let ratio = height as f32 / width as f32;
-    let target_ratio = 9.0 / 16.0;
-    if (ratio - target_ratio).abs() > 0.001 {
-        let display_ratio = ratio * 16.0;
-        display_notification(LogLevel::WARN, "wrong_ratio", &[&format!("{:.1}", display_ratio)]);
+    let height_ratio = height as f32 / (width as f32 / 16.0);
+
+    if (height_ratio - 9.0).abs() > 0.1 {
+        display_notification(LogLevel::WARN, "wrong_ratio", &[&format!("{:.2}", height_ratio)]);
         return;
     }
 
