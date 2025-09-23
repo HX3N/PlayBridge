@@ -21,9 +21,10 @@ use crate::config::{config, get_registry_dword, set_registry_dword, DISPLAY_HEIG
 use crate::notification::display_notification;
 
 use win_screenshot::prelude::*;
+use windows::core::PCWSTR;
 use windows::Win32::{
     Foundation::{HWND, RECT},
-    UI::WindowsAndMessaging::{GetClientRect, IsIconic, ShowWindow, SW_RESTORE},
+    UI::WindowsAndMessaging::{FindWindowExW, GetClassNameW, GetClientRect, IsIconic, ShowWindow, SW_RESTORE},
 };
 
 #[derive(Copy, Clone)]
@@ -34,6 +35,8 @@ pub enum LogLevel {
 }
 
 // ============================================================================
+
+const CROSVM_CLASS: &str = "CROSVM_1";
 
 fn get_title_pattern() -> String {
     format!("^{}( - .+)?$", config().title)
@@ -72,9 +75,43 @@ pub fn get_hwnd() -> Option<HWND> {
     let pattern = get_title_pattern(); // Title - Player ID
     let re = Regex::new(&pattern).unwrap();
 
-    let window = window_list().unwrap().into_iter().find(|i| re.is_match(&i.window_name));
+    let window = window_list().unwrap().into_iter().find(|i| re.is_match(&i.window_name))?;
+    let hwnd = HWND(window.hwnd as usize as *mut c_void);
 
-    window.map(|w| HWND(w.hwnd as usize as *mut c_void))
+    // Google Play Games window structure has been updated
+    // Old: CROSVM_1 > subWin
+    // New: HwndWrapper > CROSVM_1 > subWin
+    if get_window_class(hwnd).as_deref() == Some(CROSVM_CLASS) {
+        return Some(hwnd);
+    }
+    find_crosvm(hwnd).or(Some(hwnd))
+}
+
+fn find_crosvm(parent_hwnd: HWND) -> Option<HWND> {
+    let crosvm_class_wide: Vec<u16> = CROSVM_CLASS.encode_utf16().chain(Some(0)).collect();
+
+    unsafe {
+        let crosvm_hwnd = FindWindowExW(Some(parent_hwnd), None, PCWSTR(crosvm_class_wide.as_ptr()), None).expect("Failed to find crosvm window");
+
+        if crosvm_hwnd.0.is_null() {
+            None
+        } else {
+            Some(crosvm_hwnd)
+        }
+    }
+}
+
+fn get_window_class(hwnd: HWND) -> Option<String> {
+    let mut buffer: [u16; 256] = [0; 256];
+    unsafe {
+        let len = GetClassNameW(hwnd, &mut buffer);
+        if len > 0 {
+            let class_name = String::from_utf16_lossy(&buffer[..len as usize]);
+            Some(class_name)
+        } else {
+            None
+        }
+    }
 }
 
 pub fn get_info() -> (HWND, i32, i32) {
