@@ -16,6 +16,17 @@ pub fn post_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) {
     unsafe { _ = PostMessageA(Some(hwnd), msg, wparam, lparam) };
 }
 
+fn send_cancel_mode(hwnd: HWND) {
+    let target_hwnd = unsafe {
+        GetParent(hwnd)
+            .ok()
+            .filter(|parent| !parent.0.is_null())
+            .unwrap_or(hwnd)
+    };
+    
+    post_message(target_hwnd, WM_CANCELMODE, WPARAM(0), LPARAM(0));
+}
+
 fn get_relative_point(x: i32, y: i32, w: i32, h: i32) -> isize {
     let nx = (x as f32 / DISPLAY_WIDTH as f32 * w as f32).round() as isize;
     let ny = (y as f32 / DISPLAY_HEIGHT as f32 * h as f32).round() as isize;
@@ -28,7 +39,7 @@ pub fn input_tap(x: i32, y: i32) {
     let (hwnd, w, h) = get_info();
     let pos = get_relative_point(x, y, w, h);
 
-    post_message(hwnd, WM_CANCELMODE, WPARAM(0), LPARAM(0));
+    send_cancel_mode(hwnd);
     post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos));
     thread::sleep(Duration::from_millis(10));
     post_message(hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(pos));
@@ -62,7 +73,7 @@ pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
     let dy = (y2 - y1) as f32;
 
     let pos_down = get_relative_point(x1, y1, w, h);
-    post_message(hwnd, WM_CANCELMODE, WPARAM(0), LPARAM(0));
+    send_cancel_mode(hwnd);
     post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos_down));
     thread::sleep(Duration::from_millis(10));
 
