@@ -21,7 +21,7 @@ fn get_notification_body(tag: &str, args: &[&str]) -> String {
         "unknown_cmd" => format!("Unknown command!\n{}", args[0]),
         "window_minimized" => "Minimized window is not supported".to_string(),
         "wrong_ratio" => format!("Aspect ratio is not 16:9 (16:{})", args[0]),
-        "window_too_small" => format!("Window size is too low ({}x{})", args[0], args[1]),
+        "window_too_small" => format!("Window size is too small ({}x{})", args[0], args[1]),
         "window_info" => format!("Window size info ({}x{})", args[0], args[1]),
         "window_changed" => format!("Window size changed ({}x{})", args[0], args[1]),
         "storage_warning" => format!("PlayBridge folder size is {}MB!\nPlease be careful of high storage usage", args[0]),
