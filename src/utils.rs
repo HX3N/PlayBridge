@@ -37,6 +37,7 @@ pub enum LogLevel {
 // ============================================================================
 
 const CROSVM_CLASS: &str = "CROSVM_1";
+const GPG_LOADING_TIMEOUT: u64 = 3;
 
 pub fn launch_arknights(intent: &str) {
     if get_hwnd().is_some() {
@@ -46,7 +47,7 @@ pub fn launch_arknights(intent: &str) {
     let package = get_package(&intent);
     let _ = open::that(format!("googleplaygames://launch/?id={}", package));
 
-    let _ = (0..10).find(|_| {
+    let _ = (0..GPG_LOADING_TIMEOUT).find(|_| {
         thread::sleep(Duration::from_secs(1));
         get_hwnd().is_some()
     });
@@ -58,9 +59,9 @@ pub fn launch_arknights(intent: &str) {
     if is_gpg_loading() {
         display_notification(LogLevel::INFO, "gpg_loading", &[]);
         return;
-    } else {
-        panic!("Failed to start Google Play Games\nPackage: {}", get_package(&intent));
     }
+
+    panic!("Failed to start Google Play Games\nPackage: {}", get_package(&intent));
 }
 
 fn is_gpg_loading() -> bool {
@@ -76,26 +77,37 @@ pub fn ensure_gpg_ready() {
         return;
     }
 
-    if config().package != "Unknown" {
-        if is_gpg_loading() {
-            let _ = (0..10).find(|_| {
-                thread::sleep(Duration::from_secs(1));
-                get_hwnd().is_some()
-            });
-            return;
-        } else {
-            let _ = open::that(format!("googleplaygames://launch/?id={}", &config().package));
-        }
+    if config().package == "Unknown" {
+        return;
+    }
+
+    if !is_gpg_loading() {
+        let _ = open::that(format!("googleplaygames://launch/?id={}", &config().package));
+        debug_log(LogLevel::INFO, "Google Play Games is not started, launching", None);
+    }
+
+    debug_log(LogLevel::INFO, "Waiting for Google Play Games loading", None);
+    let _ = (0..GPG_LOADING_TIMEOUT).find(|_| {
+        thread::sleep(Duration::from_secs(1));
+        get_hwnd().is_some()
+    });
+
+    if get_hwnd().is_some() {
+        debug_log(LogLevel::INFO, "Google Play Games is ready", None);
+    } else {
+        debug_log(LogLevel::INFO, "Google Play Games is still loading...", None);
     }
 }
 
 fn get_package(intent: &str) -> String {
     // com.YoStar__.Arknights/com.u8.sdk.U8UnityContext
     let package = if let Some(slash_pos) = intent.find('/') { intent[..slash_pos].to_string() } else { intent.to_string() };
+
     if package != config().package {
         display_notification(LogLevel::INFO, "registry_updated", &[&"PACKAGE", &config().package, &package.to_string()]);
         set_registry_value("PACKAGE", &package).unwrap();
     }
+
     package
 }
 
@@ -119,12 +131,8 @@ pub fn get_hwnd() -> Option<HWND> {
     None
 }
 
-fn get_title_pattern(title: &str) -> String {
-    format!("^{}( - .+)?$", title)
-}
-
 fn try_find_window(title: &str) -> Option<HWND> {
-    let pattern = get_title_pattern(title);
+    let pattern = format!("^{}( - .+)?$", title);
     let re = Regex::new(&pattern).ok()?;
 
     let window = window_list().ok()?.into_iter().find(|i| re.is_match(&i.window_name))?;
@@ -189,7 +197,7 @@ fn extras_exists() -> bool {
 }
 
 fn spawn_extras_process() -> std::io::Result<()> {
-    if let Ok(_) = TcpStream::connect_timeout(&format!("127.0.0.1:{}", EXTRAS_PORT).parse().unwrap(), Duration::from_millis(EXTRAS_TIMEOUT)) {
+    if TcpStream::connect_timeout(&format!("127.0.0.1:{}", EXTRAS_PORT).parse().unwrap(), Duration::from_millis(EXTRAS_TIMEOUT)).is_ok() {
         return Ok(());
     }
 
@@ -256,7 +264,12 @@ pub fn capture() -> DynamicImage {
 
 pub fn send_capture() {
     if get_hwnd().is_none() {
-        debug_log(LogLevel::WARN, "Try to send capture, but window not found", None);
+        debug_log(LogLevel::INFO, "Try to capture Google Play Games, but window not found, returning black image", None);
+
+        // Send black image for spoofing GPG Loading
+        let black_pixels = vec![0u8; (DISPLAY_WIDTH * DISPLAY_HEIGHT * 3) as usize]; // RGB format
+        let img = DynamicImage::ImageRgb8(image::RgbImage::from_raw(DISPLAY_WIDTH, DISPLAY_HEIGHT, black_pixels).unwrap());
+        img.write_with_encoder(PngEncoder::new(&mut stdout().lock())).unwrap();
         return;
     }
 

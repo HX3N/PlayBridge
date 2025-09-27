@@ -54,29 +54,31 @@ pub fn display_notification(level: LogLevel, tag: &str, args: &[&str]) {
 
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
-    if !matches!(level, LogLevel::WARN) || check_notification_registry(tag, now, COOLDOWN_SECONDS) {
-        let icon_path = env::temp_dir().join("playbridge_icon.png");
-
-        if !icon_path.exists() {
-            fs::write(&icon_path, ICON_DATA).unwrap();
-        }
-
-        let _ = register(AUM_ID, DISPLAY_NAME, Some(&icon_path));
-
-        let manager = ToastManager::new(AUM_ID);
-        let mut toast = Toast::new();
-
-        toast
-            .tag(tag)
-            .text1(get_title_display(level))
-            .text2(winrt_toast::content::text::Text::new(&body))
-            .text3(winrt_toast::content::text::Text::new(format!("tag: {}", tag)).with_placement(TextPlacement::Attribution));
-        toast.scenario(Scenario::Reminder);
-
-        manager.show(&toast).unwrap();
-
-        set_registry_dword(tag, now as u32, &config().notification_path).unwrap();
+    if matches!(level, LogLevel::WARN) && !check_notification_registry(tag, now, COOLDOWN_SECONDS) {
+        return;
     }
+
+    let icon_path = env::temp_dir().join("playbridge_icon.png");
+
+    if !icon_path.exists() {
+        fs::write(&icon_path, ICON_DATA).unwrap();
+    }
+
+    let _ = register(AUM_ID, DISPLAY_NAME, Some(&icon_path));
+
+    let manager = ToastManager::new(AUM_ID);
+    let mut toast = Toast::new();
+
+    toast
+        .tag(tag)
+        .text1(get_title_display(level))
+        .text2(winrt_toast::content::text::Text::new(&body))
+        .text3(winrt_toast::content::text::Text::new(format!("tag: {}", tag)).with_placement(TextPlacement::Attribution));
+    toast.scenario(Scenario::Reminder);
+
+    manager.show(&toast).unwrap();
+
+    set_registry_dword(tag, now as u32, &config().notification_path).unwrap();
 }
 
 fn check_notification_registry(tag: &str, now: u64, cooldown_seconds: u64) -> bool {

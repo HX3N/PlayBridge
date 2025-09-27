@@ -56,6 +56,8 @@ fn parse_command(args: &[String]) -> Command {
     }
     let full_command = args.join(" ");
     match full_command.as_str() {
+        // 'connect' also matches 'adb disconnect'
+        // MAA doesn’t need a response, so it’s fine for now
         c if c.contains("connect") => Command::Connect,
         c if c.contains("getprop ro.build.version.release") => Command::GetPropVersionRelease,
         c if c.contains("am start -n") => Command::StartActivity { intent: args[7].clone() },
