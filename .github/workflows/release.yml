@@ -51,7 +51,6 @@ jobs:
           name: v${{ steps.version_tag.outputs.VERSION }}
           files: |
             target/release/PlayBridgeADB.exe
-            target/release/PlayBridgeExtras.exe
             PlayBridgeConfig.bat
           draft: false
           prerelease: false

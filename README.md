@@ -24,23 +24,16 @@ Or, you can change the registry values directly in `Software\PlayBridge\config`
 
 <div align="center">
 
-| Variable        | Description                    | Default                |
-| --------------- | :----------------------------- | ---------------------- |
-| `TITLE`         | Window title                   | 명일방주               |
-| `PACKAGE`       | Arknights package name         | com.YoStarKR.Arknights |
-| `SWIPE_SPEED`   | Swipe speed multiplier         | 10                     |
-| `MAX_FPS`       | Maximum FPS for Extras capture | 10                     |
-| `DEBUG`         | debug logging                  | false                  |
-| `DEBUG_CAPTURE` | debug capture                  | false                  |
+| Variable        | Description            | Default                |
+| --------------- | :--------------------- | ---------------------- |
+| `TITLE`         | Window title           | 명일방주               |
+| `PACKAGE`       | Arknights package name | com.YoStarKR.Arknights |
+| `SWIPE_SPEED`   | Swipe speed multiplier | 10                     |
+| `DEBUG`         | debug logging          | false                  |
+| `DEBUG_CAPTURE` | debug capture          | false                  |
 
 </div>
 
 ### Screenshot
 
 Running the executable directly captures a screenshot of **Google Play Games** and saves it to the Desktop
-
-### Extras (Test)
-
-> To activate it, place the `PlayBridgeExtras` in the same directory as the `PlayBridgeADB`
-
-PlayBridgeExtras can improve the screenshot time, but it consumes more CPU
