@@ -15,7 +15,7 @@ use image::{codecs::png::PngEncoder, imageops::FilterType::CatmullRom, DynamicIm
 use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut};
 use regex::Regex;
 
-use crate::config::{config, get_registry_dword, set_registry_dword, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use crate::config::*;
 use crate::notification::display_notification;
 
 use win_screenshot::prelude::*;
@@ -36,44 +36,96 @@ pub enum LogLevel {
 
 const CROSVM_CLASS: &str = "CROSVM_1";
 
-fn get_title_pattern() -> String {
-    format!("^{}( - .+)?$", config().title)
-}
-
-pub fn start_arknights() {
+pub fn launch_arknights(intent: &str) {
     if get_hwnd().is_some() {
         return;
     }
 
-    let _ = open::that(format!("googleplaygames://launch/?id={}", config().package));
+    let package = get_package(&intent);
+    let _ = open::that(format!("googleplaygames://launch/?id={}", package));
 
-    let found = (0..10).find(|_| {
+    let _ = (0..10).find(|_| {
         thread::sleep(Duration::from_secs(1));
         get_hwnd().is_some()
     });
 
-    if found.is_none() {
-        let gpg_pattern = r"^Google Play .+";
-        let re = Regex::new(gpg_pattern).unwrap();
+    if get_hwnd().is_some() {
+        return;
+    }
 
-        let gpg_window = window_list().unwrap().into_iter().find(|i| re.is_match(&i.window_name));
+    if is_gpg_loading() {
+        display_notification(LogLevel::INFO, "gpg_loading", &[]);
+        return;
+    } else {
+        panic!("Failed to start Google Play Games\nPackage: {}", get_package(&intent));
+    }
+}
 
-        if gpg_window.is_some() {
-            debug_log(LogLevel::INFO, "Google Play Games is still loading", None);
+fn is_gpg_loading() -> bool {
+    let gpg_pattern = r"^Google Play .+";
+    let re = Regex::new(gpg_pattern).unwrap();
+
+    let gpg_window = window_list().unwrap().into_iter().find(|i| re.is_match(&i.window_name));
+    gpg_window.is_some()
+}
+
+pub fn ensure_gpg_ready() {
+    if get_hwnd().is_some() {
+        return;
+    }
+
+    if config().package != "Unknown" {
+        if is_gpg_loading() {
+            let _ = (0..10).find(|_| {
+                thread::sleep(Duration::from_secs(1));
+                get_hwnd().is_some()
+            });
             return;
         } else {
-            let pattern = get_title_pattern();
-            display_notification(LogLevel::ERROR, "gpg_start_failed", &[&pattern]);
-            panic!("Failed to start Google Play Games or detect\nTarget regex: {}\nPackage: {}", pattern, config().package);
+            let _ = open::that(format!("googleplaygames://launch/?id={}", &config().package));
         }
     }
 }
 
-pub fn get_hwnd() -> Option<HWND> {
-    let pattern = get_title_pattern(); // Title - Player ID
-    let re = Regex::new(&pattern).unwrap();
+fn get_package(intent: &str) -> String {
+    // com.YoStar__.Arknights/com.u8.sdk.U8UnityContext
+    let package = if let Some(slash_pos) = intent.find('/') { intent[..slash_pos].to_string() } else { intent.to_string() };
+    if package != config().package {
+        display_notification(LogLevel::INFO, "registry_updated", &[&"PACKAGE", &config().package, &package.to_string()]);
+        set_registry_value("PACKAGE", &package).unwrap();
+    }
+    package
+}
 
-    let window = window_list().unwrap().into_iter().find(|i| re.is_match(&i.window_name))?;
+pub fn get_hwnd() -> Option<HWND> {
+    if let Some(hwnd) = try_find_window(&config().title) {
+        return Some(hwnd);
+    }
+
+    let fallback_titles = ["Arknights", "명일방주", "アークナイツ"];
+
+    for &title in &fallback_titles {
+        if title != config().title {
+            if let Some(hwnd) = try_find_window(title) {
+                display_notification(LogLevel::INFO, "registry_updated", &[&"TITLE", &config().title, &title.to_string()]);
+                set_registry_value("TITLE", title).unwrap();
+                return Some(hwnd);
+            }
+        }
+    }
+
+    None
+}
+
+fn get_title_pattern(title: &str) -> String {
+    format!("^{}( - .+)?$", title)
+}
+
+fn try_find_window(title: &str) -> Option<HWND> {
+    let pattern = get_title_pattern(title);
+    let re = Regex::new(&pattern).ok()?;
+
+    let window = window_list().ok()?.into_iter().find(|i| re.is_match(&i.window_name))?;
     let hwnd = HWND(window.hwnd as usize as *mut c_void);
 
     // Google Play Games window structure has been updated
@@ -124,7 +176,7 @@ pub fn get_info() -> (HWND, i32, i32) {
 // ============================================================================
 
 pub fn capture() -> DynamicImage {
-    let hwnd = get_hwnd().expect("Failed to find window (capture)");
+    let (hwnd, _, _) = get_info();
 
     if unsafe { IsIconic(hwnd).as_bool() } {
         display_notification(LogLevel::WARN, "window_minimized", &[]);

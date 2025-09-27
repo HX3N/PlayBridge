@@ -30,10 +30,17 @@ pub fn set_registry_dword(key_name: &str, value: u32, path: &str) -> std::io::Re
     Ok(())
 }
 
+pub fn set_registry_value(key_name: &str, value: &str) -> std::io::Result<()> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hkcu.create_subkey(REG_PATH_CONFIG)?;
+    key.set_value(key_name, &value)?;
+    Ok(())
+}
+
 pub struct Config {
     /// Window title pattern used to locate the game window
     pub title: String,
-    /// Arknights package name used to launch the game
+    /// Package name used to launch the game
     pub package: String,
     /// Multiplier for swipe speed
     pub swipe_speed: u32,
@@ -48,10 +55,10 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            title: get_reg_value("TITLE", "명일방주".to_string()),
-            package: get_reg_value("PACKAGE", "com.YoStarKR.Arknights".to_string()),
+            title: get_reg_value("TITLE", "Unknown".to_string()),
+            package: get_reg_value("PACKAGE", "Unknown".to_string()),
             swipe_speed: get_reg_value("SWIPE_SPEED", 10u32),
-            debug: get_reg_value("DEBUG", 0u32) != 0,
+            debug: get_reg_value("DEBUG", 1u32) != 0,
             debug_capture: get_reg_value("DEBUG_CAPTURE", 0u32) != 0,
 
             notification_path: REG_PATH_NOTIFICATION.to_string(),

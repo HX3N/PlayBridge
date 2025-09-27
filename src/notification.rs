@@ -17,7 +17,8 @@ fn get_notification_body(tag: &str, args: &[&str]) -> String {
     match tag {
         "screenshot" => "Screenshot saved to desktop!".to_string(),
         "gpg_shutdown" => "Shutdown Google Play Games".to_string(),
-        "gpg_start_failed" => format!("Failed to start Google Play Games or detect\nTarget regex: {}", args[0]),
+        "registry_updated" => format!("{} updated from {} to {}", args[0], args[1], args[2]),
+        "gpg_loading" => "Google Play Games is still loading...".to_string(),
         "unknown_cmd" => format!("Unknown command!\n{}", args[0]),
         "window_minimized" => "Minimized window is not supported".to_string(),
         "wrong_ratio" => format!("Aspect ratio is not 16:9 (16:{})", args[0]),
@@ -37,7 +38,7 @@ fn get_title_display(level: LogLevel) -> String {
         LogLevel::ERROR => "⛔ ERROR",
     };
 
-    if config().debug {
+    if config().debug_capture {
         format!("{} 🛠️", base_text)
     } else {
         base_text.to_string()

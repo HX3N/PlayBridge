@@ -6,21 +6,17 @@ cls
 
 call :LOAD_ALL_CONFIGS
 
-call :PRINT "1. TITLE" "%CURRENT_TITLE%"
-call :PRINT "2. PACKAGE" "%CURRENT_PACKAGE%"
-call :PRINT "3. SWIPE_SPEED" "%CURRENT_SWIPE_SPEED%"
-call :PRINT "4. DEBUG" "%CURRENT_DEBUG%"
-call :PRINT "5. DEBUG_CAPTURE" "%CURRENT_DEBUG_CAPTURE%"
-echo 6. Reset
+call :PRINT "1. SWIPE_SPEED" "%CURRENT_SWIPE_SPEED%"
+call :PRINT "2. DEBUG" "%CURRENT_DEBUG%"
+call :PRINT "3. DEBUG_CAPTURE" "%CURRENT_DEBUG_CAPTURE%"
+echo 4. Reset
 echo.
 set /p CHOICE="Enter the number to modify: "
 
-if "%CHOICE%"=="1" call :SET_VAR TITLE "%CURRENT_TITLE%" REG_SZ
-if "%CHOICE%"=="2" call :SET_VAR PACKAGE "%CURRENT_PACKAGE%" REG_SZ
-if "%CHOICE%"=="3" call :SET_VAR SWIPE_SPEED "%CURRENT_SWIPE_SPEED%" REG_DWORD
-if "%CHOICE%"=="4" call :SET_VAR DEBUG "%CURRENT_DEBUG%" REG_DWORD
-if "%CHOICE%"=="5" call :SET_VAR DEBUG_CAPTURE "%CURRENT_DEBUG_CAPTURE%" REG_DWORD
-if "%CHOICE%"=="6" call :RESET_ALL
+if "%CHOICE%"=="1" call :SET_VAR SWIPE_SPEED "%CURRENT_SWIPE_SPEED%" REG_DWORD
+if "%CHOICE%"=="2" call :SET_VAR DEBUG "%CURRENT_DEBUG%" REG_DWORD
+if "%CHOICE%"=="3" call :SET_VAR DEBUG_CAPTURE "%CURRENT_DEBUG_CAPTURE%" REG_DWORD
+if "%CHOICE%"=="4" call :RESET_ALL
 goto MENU
 
 :PRINT
@@ -44,8 +40,6 @@ goto MENU
 :RESET_ALL
 cls
 echo Resetting all PlayBridge config registry values...
-reg delete "HKCU\Software\PlayBridge\config" /v "TITLE" /f >nul 2>&1
-reg delete "HKCU\Software\PlayBridge\config" /v "PACKAGE" /f >nul 2>&1
 reg delete "HKCU\Software\PlayBridge\config" /v "SWIPE_SPEED" /f >nul 2>&1
 reg delete "HKCU\Software\PlayBridge\config" /v "DEBUG" /f >nul 2>&1
 reg delete "HKCU\Software\PlayBridge\config" /v "DEBUG_CAPTURE" /f >nul 2>&1
@@ -56,15 +50,11 @@ pause
 goto MENU
 
 :LOAD_ALL_CONFIGS
-set "CURRENT_TITLE=명일방주"
-set "CURRENT_PACKAGE=com.YoStarKR.Arknights"
 set "CURRENT_SWIPE_SPEED=10"
-set "CURRENT_DEBUG=0"
+set "CURRENT_DEBUG=1"
 set "CURRENT_DEBUG_CAPTURE=0"
 
 for /f "skip=1 tokens=1,2,*" %%a in ('reg query "HKCU\Software\PlayBridge\config" 2^>nul') do (
-  if "%%a"=="TITLE" set "CURRENT_TITLE=%%c"
-  if "%%a"=="PACKAGE" set "CURRENT_PACKAGE=%%c"
   if "%%a"=="SWIPE_SPEED" call :HEX_TO_DEC "%%c" CURRENT_SWIPE_SPEED
   if "%%a"=="DEBUG" call :HEX_TO_DEC "%%c" CURRENT_DEBUG
   if "%%a"=="DEBUG_CAPTURE" call :HEX_TO_DEC "%%c" CURRENT_DEBUG_CAPTURE

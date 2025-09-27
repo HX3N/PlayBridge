@@ -4,7 +4,7 @@ mod notification;
 use std::{env, time::Instant};
 mod utils;
 
-use crate::config::{config, Config, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use crate::config::*;
 use notification::display_notification;
 use utils::*;
 
@@ -17,7 +17,8 @@ fn main() {
     Config::default();
 
     let start = config().debug.then(Instant::now);
-    start_arknights();
+
+    ensure_gpg_ready();
 
     let args: Vec<String> = env::args().collect();
     let command = parse_command(&args);
@@ -99,6 +100,8 @@ fn execute_command(command: Command) {
             println!("14");
         }
         Command::StartActivity { intent } => {
+            launch_arknights(&intent);
+
             println!("Starting: Intent {{ cmp={} }}", intent);
             println!("Warning: Activity not started, intent has been delivered to currently running top-most instance.");
         }
@@ -134,12 +137,17 @@ fn execute_command(command: Command) {
             input::input_keyevent(keycode);
         }
         Command::ExecOutScreencap => {
+            if get_hwnd().is_none() {
+                return;
+            }
+            
             send_capture();
         }
         Command::ForceStop => {
             input::terminate();
             display_notification(LogLevel::INFO, "gpg_shutdown", &[]);
         }
+        // =========================================
         Command::Echo { text } => {
             println!("{}", text);
         }

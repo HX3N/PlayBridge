@@ -2,6 +2,9 @@
 > This repository is a **customized fork** of [PlayBridge](https://github.com/ACK72/PlayBridge)  
 > For general use, the original one is recommended
 
+> [!Warning]
+> MAA may crash (or forced exit) on first launch
+
 ### Setup
 
 Download [PlayBridgeADB](https://github.com/HX3N/PlayBridge/releases/latest) and place it inside the MAA folder<br>
@@ -24,13 +27,11 @@ Or, you can change the registry values directly in `Software\PlayBridge\config`
 
 <div align="center">
 
-| Variable        | Description            | Default                |
-| --------------- | :--------------------- | ---------------------- |
-| `TITLE`         | Window title           | 명일방주               |
-| `PACKAGE`       | Arknights package name | com.YoStarKR.Arknights |
-| `SWIPE_SPEED`   | Swipe speed multiplier | 10                     |
-| `DEBUG`         | debug logging          | false                  |
-| `DEBUG_CAPTURE` | debug capture          | false                  |
+| Variable        | Description            | Default |
+| --------------- | :--------------------- | ------- |
+| `SWIPE_SPEED`   | Swipe speed multiplier | 10      |
+| `DEBUG`         | Debug logging          | true    |
+| `DEBUG_CAPTURE` | Debug capture          | false   |
 
 </div>
 
