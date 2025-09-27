@@ -16,6 +16,7 @@ const ICON_DATA: &[u8] = include_bytes!("../assets/icon.png");
 fn get_notification_body(tag: &str, args: &[&str]) -> String {
     match tag {
         "screenshot" => "Screenshot saved to desktop!".to_string(),
+        "screenshot_failed" => "Screenshot failed, can't find the window!".to_string(),
         "gpg_shutdown" => "Shutdown Google Play Games".to_string(),
         "registry_updated" => format!("{} updated from {} to {}", args[0], args[1], args[2]),
         "gpg_loading" => "Google Play Games is still loading...".to_string(),

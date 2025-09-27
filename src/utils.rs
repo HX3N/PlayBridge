@@ -255,6 +255,11 @@ pub fn capture() -> DynamicImage {
 }
 
 pub fn send_capture() {
+    if get_hwnd().is_none() {
+        debug_log(LogLevel::WARN, "Try to send capture, but window not found", None);
+        return;
+    }
+
     let (_, w, h) = get_info();
     check_window_size(w as u32, h as u32);
 
@@ -273,6 +278,11 @@ pub fn send_capture() {
 }
 
 pub fn screenshot() {
+    if get_hwnd().is_none() {
+        display_notification(LogLevel::INFO, "screenshot_failed", &[]);
+        return;
+    }
+
     let img = capture();
     let filename = format!("Screenshot_{}.png", Local::now().format("%Y.%m.%d_%H.%M.%S.%3f"));
     let filepath = format!("{}\\Desktop\\{}", env::var("USERPROFILE").unwrap(), filename);
