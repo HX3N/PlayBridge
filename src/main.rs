@@ -140,7 +140,7 @@ fn execute_command(command: Command) {
             if get_hwnd().is_none() {
                 return;
             }
-            
+
             send_capture();
         }
         Command::ForceStop => {

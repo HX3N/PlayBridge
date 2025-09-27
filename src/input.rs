@@ -7,7 +7,7 @@ use spin_sleep;
 
 use crate::{
     config::{config, DISPLAY_HEIGHT, DISPLAY_WIDTH},
-    utils::{debug_capture, get_hwnd, get_info},
+    utils::{debug_capture, get_hwnd, get_info, invalidate_extras_image},
 };
 
 use windows::Win32::{Foundation::*, UI::WindowsAndMessaging::*};
@@ -43,6 +43,8 @@ pub fn input_tap(x: i32, y: i32) {
     post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos));
     thread::sleep(Duration::from_millis(10));
     post_message(hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(pos));
+
+    invalidate_extras_image();
 }
 
 pub fn input_text(text: &str) {

@@ -26,6 +26,7 @@ fn get_notification_body(tag: &str, args: &[&str]) -> String {
         "window_info" => format!("Window size info ({}x{})", args[0], args[1]),
         "window_changed" => format!("Window size changed ({}x{})", args[0], args[1]),
         "storage_warning" => format!("PlayBridge folder size is {}MB!\nPlease be careful of high storage usage", args[0]),
+        "extras_stop" => "Stopping Extras".to_string(),
         "panic" => format!("PANIC at {}\n{}", args[0], args[1]),
         _ => format!("Unmatched tag: {}", tag),
     }

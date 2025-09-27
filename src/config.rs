@@ -5,6 +5,9 @@ use winreg::{enums::*, types::FromRegValue, RegKey};
 pub const DISPLAY_WIDTH: u32 = 1280;
 pub const DISPLAY_HEIGHT: u32 = 720;
 
+pub const EXTRAS_PORT: u16 = 50505;
+pub const EXTRAS_FPS: u32 = 10;
+
 const REG_PATH_CONFIG: &str = r"Software\PlayBridge\config";
 const REG_PATH_NOTIFICATION: &str = r"Software\PlayBridge\notification";
 
@@ -49,6 +52,10 @@ pub struct Config {
     /// Enable or disable debug capture
     pub debug_capture: bool,
 
+    /// Maximum FPS for Extras capture
+    #[allow(dead_code)]
+    pub max_fps: u32,
+
     pub notification_path: String,
 }
 
@@ -60,6 +67,8 @@ impl Default for Config {
             swipe_speed: get_reg_value("SWIPE_SPEED", 10u32),
             debug: get_reg_value("DEBUG", 1u32) != 0,
             debug_capture: get_reg_value("DEBUG_CAPTURE", 0u32) != 0,
+
+            max_fps: EXTRAS_FPS,
 
             notification_path: REG_PATH_NOTIFICATION.to_string(),
         }

@@ -38,3 +38,9 @@ Or, you can change the registry values directly in `Software\PlayBridge\config`
 ### Screenshot
 
 Running the executable directly captures a screenshot of **Google Play Games** and saves it to the Desktop
+
+### Extras (Test)
+
+> To activate it, place the `PlayBridgeExtras` in the same directory as the `PlayBridgeADB`
+
+PlayBridgeExtras can improve the screenshot time, but it consumes more CPU
