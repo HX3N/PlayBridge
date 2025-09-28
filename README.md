@@ -1,11 +1,14 @@
-> [!Note]
-> This repository is a **customized fork** of [PlayBridge](https://github.com/ACK72/PlayBridge)  
-> For general use, the original one is recommended
+> [!TIP]
+> For general use cases, it is recommended to use the **original [PlayBridge](https://github.com/ACK72/PlayBridge)**<br>This repository is a customized fork
 
-> [!Warning]
-> MAA may crash (or forced exit) on first launch
+> [!IMPORTANT]
+>
+> ### To check for any issues, use the **`Peep`** feature in MAA's Toolbox tab
+>
+> When using multiple monitors, issues may occur if the main and sub monitors have `different screen scales`<br>
+> The Google Play Games screen must be in `16:9 aspect ratio`
 
-### Setup
+## Setup
 
 Download [PlayBridgeADB](https://github.com/HX3N/PlayBridge/releases/latest) and place it inside the MAA folder<br>
 Then, go to **MAA > Settings > Connection** and configure as follows:
@@ -20,7 +23,7 @@ Then, go to **MAA > Settings > Connection** and configure as follows:
 
 </div>
 
-### Config
+## Config
 
 To enable custom settings, run `PlayBridgeConfig.bat` and change the values<br>
 Or, you can change the registry values directly in `Software\PlayBridge\config`
@@ -35,12 +38,12 @@ Or, you can change the registry values directly in `Software\PlayBridge\config`
 
 </div>
 
-### Screenshot
+## Screenshot
 
 Running the executable directly captures a screenshot of **Google Play Games** and saves it to the Desktop
 
-### Extras (Test)
-
-> To activate it, place the `PlayBridgeExtras` in the same directory as the `PlayBridgeADB`
+## Extras (Test)
 
 PlayBridgeExtras can improve the screenshot time, but it consumes more CPU
+
+> To activate it, place the `PlayBridgeExtras` in the same directory as the `PlayBridgeADB`
