@@ -17,13 +17,8 @@ pub fn post_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) {
 }
 
 fn send_cancel_mode(hwnd: HWND) {
-    let target_hwnd = unsafe {
-        GetParent(hwnd)
-            .ok()
-            .filter(|parent| !parent.0.is_null())
-            .unwrap_or(hwnd)
-    };
-    
+    let target_hwnd = unsafe { GetParent(hwnd).ok().filter(|parent| !parent.0.is_null()).unwrap_or(hwnd) };
+
     post_message(target_hwnd, WM_CANCELMODE, WPARAM(0), LPARAM(0));
 }
 

@@ -24,7 +24,7 @@ use win_screenshot::prelude::*;
 use windows::core::PCWSTR;
 use windows::Win32::{
     Foundation::{HWND, RECT},
-    UI::WindowsAndMessaging::{FindWindowExW, GetClassNameW, GetClientRect, IsIconic, ShowWindow, SW_RESTORE},
+    UI::WindowsAndMessaging::*,
 };
 
 #[derive(Copy, Clone)]
@@ -243,14 +243,20 @@ pub fn invalidate_extras_image() {
 
 // ============================================================================
 
+fn restore_if_minimized(hwnd: HWND) {
+    let target_hwnd = unsafe { GetParent(hwnd).ok().filter(|parent| !parent.0.is_null()).unwrap_or(hwnd) };
+
+    if unsafe { IsIconic(target_hwnd).as_bool() } {
+        display_notification(LogLevel::WARN, "window_minimized", &[]);
+        unsafe { _ = ShowWindow(target_hwnd, SW_RESTORE) };
+        thread::sleep(Duration::from_millis(300));
+    }
+}
+
 pub fn capture() -> DynamicImage {
     let (hwnd, _, _) = get_info();
 
-    if unsafe { IsIconic(hwnd).as_bool() } {
-        display_notification(LogLevel::WARN, "window_minimized", &[]);
-        unsafe { _ = ShowWindow(hwnd, SW_RESTORE) };
-        thread::sleep(Duration::from_millis(300));
-    }
+    restore_if_minimized(hwnd);
 
     let buf = capture_window_ex(hwnd.0 as isize, Using::PrintWindow, Area::ClientOnly, None, None).unwrap();
 
