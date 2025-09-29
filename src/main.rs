@@ -11,12 +11,11 @@ use utils::*;
 #[ctor::ctor]
 fn init() {
     panic_hook();
+    Config::default();
 }
 
 fn main() {
-    Config::default();
-
-    let start = config().debug.then(Instant::now);
+    let start = Instant::now();
 
     ensure_gpg_ready();
 
@@ -24,9 +23,7 @@ fn main() {
     let command = parse_command(&args);
     execute_command(command);
 
-    if let Some(start) = start {
-        debug_log(LogLevel::INFO, &args.join(" "), Some(start.elapsed().as_millis()));
-    }
+    debug_log(LogLevel::INFO, &args.join(" "), Some(start.elapsed().as_millis()));
 
     check_folder_size();
 }

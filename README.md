@@ -1,11 +1,10 @@
-> [!TIP]
+> [!NOTE]
 > For general use cases, it is recommended to use the **original [PlayBridge](https://github.com/ACK72/PlayBridge)**<br>This repository is a customized fork
 
 > [!IMPORTANT]
 >
 > ### To check for any issues, use the **`Peep`** feature in MAA's Toolbox tab
 >
-> When using multiple monitors, issues may occur if the main and sub monitors have `different screen scales`<br>
 > The Google Play Games screen must be in `16:9 aspect ratio`
 
 ## Setup

@@ -24,6 +24,7 @@ use win_screenshot::prelude::*;
 use windows::core::PCWSTR;
 use windows::Win32::{
     Foundation::{HWND, RECT},
+    UI::HiDpi::{GetWindowDpiAwarenessContext, SetThreadDpiAwarenessContext},
     UI::WindowsAndMessaging::*,
 };
 
@@ -257,6 +258,9 @@ pub fn capture() -> DynamicImage {
     let (hwnd, _, _) = get_info();
 
     restore_if_minimized(hwnd);
+
+    // Handle mixed DPI settings properly in multiple-monitor setups (ex. main 125%, sub 100%)
+    unsafe { _ = SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(hwnd)) };
 
     let buf = capture_window_ex(hwnd.0 as isize, Using::PrintWindow, Area::ClientOnly, None, None).unwrap();
 
