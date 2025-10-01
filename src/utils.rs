@@ -84,19 +84,19 @@ pub fn ensure_gpg_ready() {
 
     if !is_gpg_loading() {
         let _ = open::that(format!("googleplaygames://launch/?id={}", &config().package));
-        debug_log(LogLevel::INFO, "Google Play Games is not started, launching", None);
+        debug_log(LogLevel::INFO, "Google Play Games not started, launching...", None);
     }
 
-    debug_log(LogLevel::INFO, "Waiting for Google Play Games loading", None);
-    let _ = (0..GPG_LOADING_TIMEOUT).find(|_| {
+    debug_log(LogLevel::INFO, "Waiting for Google Play Games to be ready", None);
+    let ready = (0..GPG_LOADING_TIMEOUT).find(|_| {
         thread::sleep(Duration::from_secs(1));
         get_hwnd().is_some()
-    });
+    }).is_some();
 
-    if get_hwnd().is_some() {
+    if ready {
         debug_log(LogLevel::INFO, "Google Play Games is ready", None);
     } else {
-        debug_log(LogLevel::INFO, "Google Play Games is still loading...", None);
+        debug_log(LogLevel::WARN, "Google Play Games is still loading...", None);
     }
 }
 
@@ -274,7 +274,7 @@ pub fn capture() -> DynamicImage {
 
 pub fn send_capture() {
     if get_hwnd().is_none() {
-        debug_log(LogLevel::INFO, "Try to capture Google Play Games, but window not found, returning black image", None);
+        debug_log(LogLevel::INFO, "Capture requested but window not found, sending black image instead", None);
 
         // Send black image for spoofing GPG Loading
         let black_pixels = vec![0u8; (DISPLAY_WIDTH * DISPLAY_HEIGHT * 3) as usize]; // RGB format
@@ -407,7 +407,7 @@ fn check_window_size(width: u32, height: u32) {
     let height_ratio = height as f32 / (width as f32 / 16.0);
 
     if (height_ratio - 9.0).abs() > 0.1 {
-        display_notification(LogLevel::WARN, "wrong_ratio", &[&format!("{:.2}", height_ratio)]);
+        display_notification(LogLevel::WARN, "window_wrong_ratio", &[&format!("{:.2}", height_ratio)]);
         return;
     }
 

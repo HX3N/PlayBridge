@@ -120,7 +120,7 @@ fn main() {
     // Request
     loop {
         if *should_exit.lock().unwrap() {
-            display_notification(LogLevel::INFO, "extras_stop", &[]);
+            display_notification(LogLevel::INFO, "extras_shutdown", &[]);
             break;
         }
 

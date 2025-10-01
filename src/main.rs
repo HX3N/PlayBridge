@@ -148,7 +148,7 @@ fn execute_command(command: Command) {
         }
         Command::IgnoreCommand => {}
         Command::Unknown(cmd) => {
-            display_notification(LogLevel::ERROR, "unknown_cmd", &[&cmd]);
+            display_notification(LogLevel::ERROR, "unknown_command", &[&cmd]);
         }
     }
 }
