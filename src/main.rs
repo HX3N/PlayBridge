@@ -136,6 +136,10 @@ fn execute_command(command: Command) {
             input::input_keyevent(keycode);
         }
         Command::ExecOutScreencap => {
+            if get_hwnd().is_none() {
+                return;
+            }
+
             send_capture();
         }
         Command::ForceStop => {

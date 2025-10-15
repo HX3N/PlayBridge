@@ -41,7 +41,6 @@ goto MENU
 cls
 echo Resetting all PlayBridge config registry values...
 reg delete "HKCU\Software\PlayBridge\config" /v "SWIPE_SPEED" /f >nul 2>&1
-reg delete "HKCU\Software\PlayBridge\config" /v "MAX_FPS" /f >nul 2>&1
 reg delete "HKCU\Software\PlayBridge\config" /v "DEBUG" /f >nul 2>&1
 reg delete "HKCU\Software\PlayBridge\config" /v "DEBUG_CAPTURE" /f >nul 2>&1
 
@@ -57,7 +56,6 @@ set "CURRENT_DEBUG_CAPTURE=0"
 
 for /f "skip=1 tokens=1,2,*" %%a in ('reg query "HKCU\Software\PlayBridge\config" 2^>nul') do (
   if "%%a"=="SWIPE_SPEED" call :HEX_TO_DEC "%%c" CURRENT_SWIPE_SPEED
-  if "%%a"=="MAX_FPS" call :HEX_TO_DEC "%%c" CURRENT_MAX_FPS
   if "%%a"=="DEBUG" call :HEX_TO_DEC "%%c" CURRENT_DEBUG
   if "%%a"=="DEBUG_CAPTURE" call :HEX_TO_DEC "%%c" CURRENT_DEBUG_CAPTURE
 )

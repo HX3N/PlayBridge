@@ -26,7 +26,6 @@ fn get_notification_body(tag: &str, args: &[&str]) -> String {
         "window_wrong_ratio" => format!("Window aspect ratio is not 16:9 (16:{})", args[0]),
         "registry_updated" => format!("{} updated from {} to {}", args[0], args[1], args[2]),
         "storage_warning" => format!("PlayBridge folder size is {}MB!\nPlease be careful of high storage usage", args[0]),
-        "extras_shutdown" => "Extras is shutting down...".to_string(),
         "unknown_command" => format!("Unknown command!\n{}", args[0]),
         "panic" => format!("PANIC at {}\n{}", args[0], args[1]),
         _ => format!("Unmatched tag: {}", tag),

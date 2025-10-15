@@ -28,7 +28,3 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
-
-[[bin]]
-name = "PlayBridgeExtras"
-path = "src/bin/extras.rs"

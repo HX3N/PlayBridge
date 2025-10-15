@@ -4,11 +4,9 @@ use std::{
     env,
     ffi::c_void,
     fs::{File, OpenOptions},
-    io::{stdout, Read, Write},
-    net::{Shutdown, TcpStream},
+    io::{stdout, Write},
     panic,
     path::PathBuf,
-    process::Command,
     thread,
     time::Duration,
 };
@@ -88,10 +86,12 @@ pub fn ensure_gpg_ready() {
     }
 
     debug_log(LogLevel::INFO, "Waiting for Google Play Games to be ready", None);
-    let ready = (0..GPG_LOADING_TIMEOUT).find(|_| {
-        thread::sleep(Duration::from_secs(1));
-        get_hwnd().is_some()
-    }).is_some();
+    let ready = (0..GPG_LOADING_TIMEOUT)
+        .find(|_| {
+            thread::sleep(Duration::from_secs(1));
+            get_hwnd().is_some()
+        })
+        .is_some();
 
     if ready {
         debug_log(LogLevel::INFO, "Google Play Games is ready", None);
@@ -152,7 +152,8 @@ fn find_crosvm(parent_hwnd: HWND) -> Option<HWND> {
     let crosvm_class_wide: Vec<u16> = CROSVM_CLASS.encode_utf16().chain(Some(0)).collect();
 
     unsafe {
-        let crosvm_hwnd = FindWindowExW(Some(parent_hwnd), None, PCWSTR(crosvm_class_wide.as_ptr()), None).expect("Failed to find crosvm window");
+        let crosvm_hwnd =
+            FindWindowExW(Some(parent_hwnd), None, PCWSTR(crosvm_class_wide.as_ptr()), None).expect("Failed to find crosvm window");
 
         if crosvm_hwnd.0.is_null() {
             None
@@ -182,64 +183,6 @@ pub fn get_info() -> (HWND, i32, i32) {
     let (w, h) = if unsafe { GetClientRect(hwnd, &mut rect) }.is_ok() { (rect.right - rect.left, rect.bottom - rect.top) } else { (0, 0) };
 
     (hwnd, w, h)
-}
-
-// ============================================================================
-
-const EXTRAS_TIMEOUT: u64 = 50;
-
-fn extras_exists() -> bool {
-    let mut path: PathBuf = match std::env::current_exe() {
-        Ok(p) => p,
-        Err(_) => return false,
-    };
-    path.set_file_name("PlayBridgeExtras.exe");
-    path.exists()
-}
-
-fn spawn_extras_process() -> std::io::Result<()> {
-    if TcpStream::connect_timeout(&format!("127.0.0.1:{}", EXTRAS_PORT).parse().unwrap(), Duration::from_millis(EXTRAS_TIMEOUT)).is_ok() {
-        return Ok(());
-    }
-
-    let mut path: PathBuf = std::env::current_exe()?;
-    path.set_file_name("PlayBridgeExtras.exe");
-
-    Command::new(path).spawn().map(|_| ())
-}
-
-fn request_extras_image() -> bool {
-    if !extras_exists() {
-        return false;
-    }
-
-    let mut stream = match TcpStream::connect_timeout(&format!("127.0.0.1:{}", EXTRAS_PORT).parse().unwrap(), Duration::from_millis(EXTRAS_TIMEOUT)) {
-        Ok(stream) => stream,
-        Err(_) => return false,
-    };
-
-    stream.write_all(b"GET").unwrap();
-    stream.shutdown(Shutdown::Write).unwrap();
-
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).unwrap();
-    stdout().lock().write_all(&buf).unwrap();
-
-    !buf.is_empty() // return
-}
-
-pub fn invalidate_extras_image() {
-    if !extras_exists() {
-        return;
-    }
-
-    // Input tap - wait for load next frame
-    thread::sleep(Duration::from_millis(150));
-
-    if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{}", EXTRAS_PORT)) {
-        stream.write_all(b"INV").unwrap();
-        stream.shutdown(Shutdown::Write).unwrap();
-    }
 }
 
 // ============================================================================
@@ -286,16 +229,6 @@ pub fn send_capture() {
     let (_, w, h) = get_info();
     check_window_size(w as u32, h as u32);
 
-    if extras_exists() {
-        spawn_extras_process().unwrap();
-    }
-
-    // Extras
-    if request_extras_image() {
-        return;
-    }
-
-    // fallback
     let img = capture();
     img.write_with_encoder(PngEncoder::new(&mut stdout().lock())).unwrap();
 }
@@ -375,19 +308,11 @@ pub fn debug_log(level: LogLevel, message: &str, elapsed_ms: Option<u128>) {
         LogLevel::ERROR => "ERR",
     };
 
-    let exe_name = env::current_exe().ok().and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string())).unwrap_or_else(|| "UNK".into());
-
-    let prog_tag = match exe_name.as_str() {
-        "PlayBridgeADB" => "ADB",
-        "PlayBridgeExtras" => "Extras",
-        _ => exe_name.as_str(),
-    };
-
     let flat_message = message.replace('\n', " ");
 
     let log = match elapsed_ms {
-        Some(ms) => format!("[{}][{}][{}] {} , cost {} ms", now, level_tag, prog_tag, flat_message, ms),
-        None => format!("[{}][{}][{}] {}", now, level_tag, prog_tag, flat_message),
+        Some(ms) => format!("[{}][{}] {} , cost {} ms", now, level_tag, flat_message, ms),
+        None => format!("[{}][{}] {}", now, level_tag, flat_message),
     };
 
     let _ = writeln!(file, "{}", log);
@@ -395,9 +320,17 @@ pub fn debug_log(level: LogLevel, message: &str, elapsed_ms: Option<u128>) {
 
 pub fn panic_hook() {
     panic::set_hook(Box::new(|info| {
-        let msg = info.payload().downcast_ref::<&str>().map(|s| *s).or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str())).unwrap_or("Unknown panic message");
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| *s)
+            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+            .unwrap_or("Unknown panic message");
 
-        let location = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_else(|| "unknown location".into());
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "unknown location".into());
 
         display_notification(LogLevel::ERROR, "panic", &[&location, msg]);
     }));
