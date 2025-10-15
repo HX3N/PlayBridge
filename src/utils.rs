@@ -200,8 +200,6 @@ fn restore_if_minimized(hwnd: HWND) {
 pub fn capture() -> DynamicImage {
     let (hwnd, _, _) = get_info();
 
-    restore_if_minimized(hwnd);
-
     // Handle mixed DPI settings properly in multiple-monitor setups (ex. main 125%, sub 100%)
     unsafe { _ = SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(hwnd)) };
 
@@ -225,6 +223,8 @@ pub fn send_capture() {
         img.write_with_encoder(PngEncoder::new(&mut stdout().lock())).unwrap();
         return;
     }
+
+    restore_if_minimized(get_hwnd().unwrap());
 
     let (_, w, h) = get_info();
     check_window_size(w as u32, h as u32);
