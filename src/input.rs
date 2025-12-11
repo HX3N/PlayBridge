@@ -1,16 +1,24 @@
+use crate::{
+    capture::debug_capture,
+    config::{DISPLAY_HEIGHT, DISPLAY_WIDTH},
+    logging::{debug_log, LogLevel, LogMode},
+    window::{get_hwnd, get_info},
+};
 use std::{
     thread,
     time::{Duration, Instant},
 };
 
-use spin_sleep;
-
-use crate::{
-    config::{config, DISPLAY_HEIGHT, DISPLAY_WIDTH},
-    utils::{debug_capture, get_hwnd, get_info},
+use windows::Win32::{
+    Foundation::{HWND, LPARAM, WPARAM},
+    UI::WindowsAndMessaging::{
+        GetParent, PostMessageA, WM_CANCELMODE, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    },
 };
 
-use windows::Win32::{Foundation::*, UI::WindowsAndMessaging::*};
+const INPUT_DELAY_MS: u64 = 10;
+const TEXT_INPUT_DELAY_MS: u64 = 50;
+const SWIPE_SPEED: u32 = 10;
 
 pub fn post_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) {
     unsafe { _ = PostMessageA(Some(hwnd), msg, wparam, lparam) };
@@ -36,15 +44,18 @@ pub fn input_tap(x: i32, y: i32) {
 
     send_cancel_mode(hwnd);
     post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos));
-    thread::sleep(Duration::from_millis(10));
+    thread::sleep(Duration::from_millis(INPUT_DELAY_MS));
     post_message(hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(pos));
 }
 
 pub fn input_text(text: &str) {
-    let hwnd = get_hwnd().expect("Failed to find window (input_text)");
+    let Some(hwnd) = get_hwnd() else {
+        debug_log(LogLevel::Warn, LogMode::Nested, "input_text: Window not found");
+        return;
+    };
     for ch in text.chars() {
         post_message(hwnd, WM_CHAR, WPARAM(ch as usize), LPARAM(0));
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(TEXT_INPUT_DELAY_MS));
     }
 }
 
@@ -58,8 +69,7 @@ fn ease_in_out(t: f32) -> f32 {
 
 pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
     let (hwnd, w, h) = get_info();
-
-    let effective_duration = Duration::from_millis((duration as f32 / config().swipe_speed as f32).max(1.0) as u64);
+    let effective_duration = Duration::from_millis((duration as f32 / SWIPE_SPEED as f32).max(1.0) as u64);
     let start_time = Instant::now();
 
     let dx = (x2 - x1) as f32;
@@ -68,10 +78,9 @@ pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
     let pos_down = get_relative_point(x1, y1, w, h);
     send_cancel_mode(hwnd);
     post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos_down));
-    thread::sleep(Duration::from_millis(10));
+    thread::sleep(Duration::from_millis(INPUT_DELAY_MS));
 
     let mut last_pos = pos_down;
-    let mut debug_captured = false;
 
     loop {
         let elapsed = start_time.elapsed();
@@ -79,8 +88,7 @@ pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
             break;
         }
 
-        let progress = elapsed.as_secs_f32() / effective_duration.as_secs_f32();
-        let eased_progress = ease_in_out(progress);
+        let eased_progress = ease_in_out(elapsed.as_secs_f32() / effective_duration.as_secs_f32());
 
         let nx = x1 + (dx * eased_progress).round() as i32;
         let ny = y1 + (dy * eased_progress).round() as i32;
@@ -91,22 +99,22 @@ pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
             last_pos = pos;
         }
 
-        if !debug_captured && progress >= 0.9 {
-            debug_capture(x1, y1, Some((x2, y2)));
-            debug_captured = true;
-        }
-
         spin_sleep::sleep(Duration::from_millis(1));
     }
 
     let pos_up = get_relative_point(x2, y2, w, h);
     post_message(hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos_up));
-    thread::sleep(Duration::from_millis(10));
+    thread::sleep(Duration::from_millis(INPUT_DELAY_MS));
     post_message(hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(pos_up));
+
+    debug_capture(x1, y1, Some((x2, y2)));
 }
 
 pub fn input_keyevent(keycode: i32) {
-    let hwnd = get_hwnd().expect("Failed to find window (input_keyevent)");
+    let Some(hwnd) = get_hwnd() else {
+        debug_log(LogLevel::Warn, LogMode::Nested, "input_keyevent: Window not found");
+        return;
+    };
     let wparam = WPARAM(keycode as usize);
     let down = LPARAM((keycode << 16) as isize);
     let up = LPARAM((keycode << 16 | 1 << 30 | 1 << 31) as isize);
@@ -115,6 +123,9 @@ pub fn input_keyevent(keycode: i32) {
 }
 
 pub fn terminate() {
-    let hwnd = get_hwnd().expect("Failed to find window (terminate)");
+    let Some(hwnd) = get_hwnd() else {
+        debug_log(LogLevel::Warn, LogMode::Nested, "terminate: Window not found");
+        return;
+    };
     post_message(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
 }

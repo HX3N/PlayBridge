@@ -1,0 +1,68 @@
+use std::{env, fs::OpenOptions, io::Write, panic, path::PathBuf};
+
+use chrono::Local;
+
+use crate::notification::{display_notification, Notification};
+
+#[derive(Copy, Clone)]
+pub enum LogLevel {
+    Info,
+    Warn,
+    Error,
+}
+
+#[derive(Copy, Clone)]
+pub enum LogMode {
+    Start,
+    Nested,
+    End,
+}
+
+pub fn get_debug_folder() -> PathBuf {
+    let exe_dir = env::current_exe().unwrap().parent().unwrap().to_path_buf();
+    let folder_path = exe_dir.join("PlayBridge");
+    let _ = std::fs::create_dir_all(&folder_path);
+    folder_path
+}
+
+pub fn debug_log(level: LogLevel, mode: LogMode, message: &str) {
+    let log_path = get_debug_folder().join("debug.log");
+    let Ok(mut file) = OpenOptions::new().append(true).create(true).open(log_path) else {
+        return;
+    };
+
+    let now = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+    let level_tag = match level {
+        LogLevel::Info => "INF",
+        LogLevel::Warn => "WRN",
+        LogLevel::Error => "ERR",
+    };
+
+    let flat_message = message.replace('\n', " ");
+
+    let log = match mode {
+        LogMode::Start => format!("[{}][{}] {}", now, level_tag, flat_message),
+        LogMode::Nested => format!("[{}][{}] │ {}", now, level_tag, flat_message),
+        LogMode::End => format!("[{}][{}] └ {}", now, level_tag, flat_message),
+    };
+
+    let _ = writeln!(file, "{}", log);
+}
+
+pub fn panic_hook() {
+    panic::set_hook(Box::new(|info| {
+        let msg = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+            .unwrap_or("Unknown panic message");
+
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "unknown location".into());
+
+        display_notification(Notification::Panic(format!("{} - {}", location, msg)));
+    }));
+}

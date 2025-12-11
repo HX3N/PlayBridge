@@ -4,39 +4,80 @@ use std::{
 };
 
 use crate::config::{config, get_registry_dword, set_registry_dword};
-use crate::utils::*;
+use crate::logging::{debug_log, LogLevel, LogMode};
 use winrt_toast::{content::text::TextPlacement, register, Scenario, Toast, ToastManager};
 
-const COOLDOWN_SECONDS: u64 = 20;
 const AUM_ID: &str = "PlayBridge";
 const DISPLAY_NAME: &str = "PlayBridge";
 
+const REG_PATH_NOTIFICATION: &str = r"Software\PlayBridge\notification";
 const ICON_DATA: &[u8] = include_bytes!("../assets/icon.png");
 
-fn get_notification_body(tag: &str, args: &[&str]) -> String {
-    match tag {
-        "screenshot" => "Screenshot saved to desktop!".to_string(),
-        "screenshot_failed" => "Screenshot failed, can't find the window!".to_string(),
-        "gpg_loading" => "Google Play Games is still loading...".to_string(),
-        "gpg_shutdown" => "Google Play Games is shutting down...".to_string(),
-        "window_info" => format!("Window size info ({}x{})", args[0], args[1]),
-        "window_changed" => format!("Window size changed ({}x{})", args[0], args[1]),
-        "window_minimized" => "Minimized window is not supported".to_string(),
-        "window_too_small" => format!("Window size is too small ({}x{})", args[0], args[1]),
-        "window_wrong_ratio" => format!("Window aspect ratio is not 16:9 (16:{})", args[0]),
-        "registry_updated" => format!("{} updated from {} to {}", args[0], args[1], args[2]),
-        "storage_warning" => format!("PlayBridge folder size is {}MB!\nPlease be careful of high storage usage", args[0]),
-        "unknown_command" => format!("Unknown command!\n{}", args[0]),
-        "panic" => format!("PANIC at {}\n{}", args[0], args[1]),
-        _ => format!("Unmatched tag: {}", tag),
+pub fn get_value(key: &str) -> u32 {
+    get_registry_dword(key, REG_PATH_NOTIFICATION).unwrap_or(0)
+}
+
+pub fn set_value(key: &str, value: u32) {
+    let _ = set_registry_dword(key, value, REG_PATH_NOTIFICATION);
+}
+
+#[derive(Debug)]
+pub enum Notification {
+    Screenshot,
+    ScreenshotFailed,
+    GpgShutdown,
+    WindowInfo(u32, u32),
+    WindowChanged(u32, u32, u32, u32),
+    WindowMinimized,
+    WindowTooSmall(u32, u32),
+    WindowWrongRatio(f32),
+    UnknownCommand(String),
+    Panic(String),
+}
+
+impl Notification {
+    fn level(&self) -> LogLevel {
+        match self {
+            Self::Screenshot | Self::GpgShutdown | Self::WindowInfo(..) | Self::WindowChanged(..) => LogLevel::Info,
+            Self::WindowMinimized | Self::WindowTooSmall(..) | Self::WindowWrongRatio(..) => LogLevel::Warn,
+            Self::ScreenshotFailed | Self::UnknownCommand(..) | Self::Panic(..) => LogLevel::Error,
+        }
+    }
+
+    fn tag(&self) -> String {
+        let debug_str = format!("{:?}", self);
+        debug_str.split('(').next().unwrap_or(&debug_str).to_string()
+    }
+
+    fn body(&self) -> String {
+        match self {
+            Self::Screenshot => "Screenshot saved to desktop".into(),
+            Self::ScreenshotFailed => "Screenshot failed, can't find the window".into(),
+            Self::GpgShutdown => "Google Play Games is shutting down".into(),
+            Self::WindowInfo(w, h) => format!("Window size: {}x{}", w, h),
+            Self::WindowChanged(old_w, old_h, w, h) => format!("Window size changed: {}x{} to {}x{}", old_w, old_h, w, h),
+            Self::WindowMinimized => "Minimized window is not supported".into(),
+            Self::WindowTooSmall(w, h) => format!("Window too small: {}x{}", w, h),
+            Self::WindowWrongRatio(r) => format!("Window ratio: 16:{:.2} (expected 16:9)", r),
+            Self::UnknownCommand(c) => format!("Unknown command:\n{}", c),
+            Self::Panic(msg) => format!("PANIC:\n{}", msg),
+        }
+    }
+
+    fn cooldown(&self) -> Option<u64> {
+        match self {
+            Self::WindowMinimized | Self::WindowTooSmall(..) | Self::WindowWrongRatio(..) => Some(20),
+            Self::WindowChanged(..) => Some(1),
+            _ => None,
+        }
     }
 }
 
 fn get_title_display(level: LogLevel) -> String {
     let base_text = match level {
-        LogLevel::INFO => "ℹ️ Info",
-        LogLevel::WARN => "⚠️ Warning",
-        LogLevel::ERROR => "⛔ ERROR",
+        LogLevel::Info => "ℹ️ Info",
+        LogLevel::Warn => "⚠️ Warning",
+        LogLevel::Error => "⛔ ERROR",
     };
 
     if config().debug_capture {
@@ -46,15 +87,19 @@ fn get_title_display(level: LogLevel) -> String {
     }
 }
 
-pub fn display_notification(level: LogLevel, tag: &str, args: &[&str]) {
-    let body = get_notification_body(tag, args);
+pub fn display_notification(notification: Notification) {
+    let level = notification.level();
+    let tag = notification.tag();
+    let body = notification.body();
 
-    debug_log(level, &format!("{} , tag: {}", body, tag), None);
+    debug_log(level, LogMode::Nested, &body);
 
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
-    if matches!(level, LogLevel::WARN) && !check_notification_registry(tag, now, COOLDOWN_SECONDS) {
-        return;
+    if let Some(cooldown) = notification.cooldown() {
+        if !check_notification_registry(&tag, now, cooldown) {
+            return;
+        }
     }
 
     let icon_path = env::temp_dir().join("playbridge_icon.png");
@@ -69,7 +114,7 @@ pub fn display_notification(level: LogLevel, tag: &str, args: &[&str]) {
     let mut toast = Toast::new();
 
     toast
-        .tag(tag)
+        .tag(&tag)
         .text1(get_title_display(level))
         .text2(winrt_toast::content::text::Text::new(&body))
         .text3(winrt_toast::content::text::Text::new(format!("tag: {}", tag)).with_placement(TextPlacement::Attribution));
@@ -77,11 +122,11 @@ pub fn display_notification(level: LogLevel, tag: &str, args: &[&str]) {
 
     manager.show(&toast).unwrap();
 
-    set_registry_dword(tag, now as u32, &config().notification_path).unwrap();
+    set_registry_dword(&tag, now as u32, REG_PATH_NOTIFICATION).unwrap();
 }
 
 fn check_notification_registry(tag: &str, now: u64, cooldown_seconds: u64) -> bool {
-    match get_registry_dword(tag, &config().notification_path) {
+    match get_registry_dword(tag, REG_PATH_NOTIFICATION) {
         Ok(last_time) => now - last_time as u64 >= cooldown_seconds,
         Err(_) => true,
     }

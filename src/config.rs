@@ -2,11 +2,12 @@ use once_cell::sync::Lazy;
 use std::sync::{Arc, RwLock};
 use winreg::{enums::*, types::FromRegValue, RegKey};
 
+use crate::logging::{debug_log, LogLevel, LogMode};
+
 pub const DISPLAY_WIDTH: u32 = 1280;
 pub const DISPLAY_HEIGHT: u32 = 720;
 
 const REG_PATH_CONFIG: &str = r"Software\PlayBridge\config";
-const REG_PATH_NOTIFICATION: &str = r"Software\PlayBridge\notification";
 
 fn get_reg_value<T>(key_name: &str, default_value: T) -> T
 where
@@ -37,31 +38,35 @@ pub fn set_registry_value(key_name: &str, value: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+pub fn toggle_debug() {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hkcu.create_subkey(REG_PATH_CONFIG).unwrap();
+    let current_val: u32 = key.get_value("DEBUG_CAPTURE").unwrap_or(0);
+    let new_val: u32 = if current_val == 0 { 1 } else { 0 };
+    key.set_value("DEBUG_CAPTURE", &new_val).unwrap();
+
+    let status = if new_val == 1 { "ON" } else { "OFF" };
+    let msg = format!("DEBUG_CAPTURE: {}", status);
+    println!("{}", msg);
+
+    debug_log(LogLevel::Info, LogMode::Nested, &msg);
+}
+
 pub struct Config {
     /// Window title pattern used to locate the game window
     pub title: String,
     /// Package name used to launch the game
     pub package: String,
-    /// Multiplier for swipe speed
-    pub swipe_speed: u32,
-    /// Enable or disable debug logging
-    pub debug: bool,
     /// Enable or disable debug capture
     pub debug_capture: bool,
-
-    pub notification_path: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            title: get_reg_value("TITLE", "Unknown".to_string()),
-            package: get_reg_value("PACKAGE", "Unknown".to_string()),
-            swipe_speed: get_reg_value("SWIPE_SPEED", 10u32),
-            debug: get_reg_value("DEBUG", 1u32) != 0,
+            title: get_reg_value("TITLE", String::new()),
+            package: get_reg_value("PACKAGE", String::new()),
             debug_capture: get_reg_value("DEBUG_CAPTURE", 0u32) != 0,
-
-            notification_path: REG_PATH_NOTIFICATION.to_string(),
         }
     }
 }

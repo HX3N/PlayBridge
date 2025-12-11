@@ -22,20 +22,10 @@ Then, go to **MAA > Settings > Connection** and configure as follows:
 
 </div>
 
-## Config
+## Debug Capture
 
-To enable custom settings, run `PlayBridgeConfig.bat` and change the values<br>
-Or, you can change the registry values directly in `Software\PlayBridge\config`
-
-<div align="center">
-
-| Variable        | Description            | Default |
-| --------------- | :--------------------- | ------- |
-| `SWIPE_SPEED`   | Swipe speed multiplier | 10      |
-| `DEBUG`         | Debug logging          | true    |
-| `DEBUG_CAPTURE` | Debug capture          | false   |
-
-</div>
+Run `.\PlayBridgeADB debug` in the directory where the executable is located to toggle debug mode<br>
+You can also modify the registry value directly at `Software\PlayBridge\config\DEBUG_CAPTURE`
 
 ## Screenshot
 

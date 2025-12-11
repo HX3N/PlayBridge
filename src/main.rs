@@ -1,12 +1,17 @@
+mod capture;
 mod config;
 mod input;
+mod logging;
 mod notification;
-use std::{env, time::Instant};
-mod utils;
+mod window;
 
-use crate::config::*;
-use notification::display_notification;
-use utils::*;
+use std::{env, time::Instant};
+
+use crate::capture::{screenshot, send_capture};
+use crate::config::{toggle_debug, Config, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use crate::logging::{debug_log, panic_hook, LogLevel, LogMode};
+use crate::notification::{display_notification, Notification};
+use crate::window::{launch_arknights, wait_for_game};
 
 #[ctor::ctor]
 fn init() {
@@ -16,34 +21,35 @@ fn init() {
 
 fn main() {
     let start = Instant::now();
-
-    ensure_gpg_ready();
-
     let args: Vec<String> = env::args().collect();
+
+    debug_log(LogLevel::Info, LogMode::Start, &args.join(" "));
+
+    wait_for_game();
+
     let command = parse_command(&args);
     execute_command(command);
 
-    debug_log(LogLevel::INFO, &args.join(" "), Some(start.elapsed().as_millis()));
-
-    check_folder_size();
+    debug_log(LogLevel::Info, LogMode::End, &format!("{} ms", start.elapsed().as_millis()));
 }
 
 enum Command {
     Empty,
+    ToggleDebug,
     Connect,
-    GetPropVersionRelease,
+    GetPropRelease,
     StartActivity { intent: String },
     Devices,
-    DumpsysWindowDisplays,
-    GetUUID,
-    InputTap { x: i32, y: i32 },
-    InputText { text: String },
-    InputSwipe { x1: i32, y1: i32, x2: i32, y2: i32, duration: i32 },
-    InputKeyEvent { keycode: i32 },
-    ExecOutScreencap,
+    WindowDisplays,
+    GetUuid,
+    Tap { x: i32, y: i32 },
+    Text { text: String },
+    Swipe { x1: i32, y1: i32, x2: i32, y2: i32, duration: i32 },
+    KeyEvent { keycode: i32 },
+    Screencap,
     ForceStop,
     Echo { text: String },
-    IgnoreCommand,
+    Ignore,
     Unknown(String),
 }
 
@@ -53,26 +59,27 @@ fn parse_command(args: &[String]) -> Command {
     }
     let full_command = args.join(" ");
     match full_command.as_str() {
+        c if c.contains("debug") => Command::ToggleDebug,
         // 'connect' also matches 'adb disconnect'
-        // MAA doesn’t need a response, so it’s fine for now
+        // MAA doesn't need a response, so it's fine for now
         c if c.contains("connect") => Command::Connect,
-        c if c.contains("getprop ro.build.version.release") => Command::GetPropVersionRelease,
+        c if c.contains("getprop ro.build.version.release") => Command::GetPropRelease,
         c if c.contains("am start -n") => Command::StartActivity { intent: args[7].clone() },
         c if c.contains("devices") => Command::Devices,
-        c if c.contains("input tap") => Command::InputTap { x: args[6].parse().unwrap(), y: args[7].parse().unwrap() },
-        c if c.contains("input text") => Command::InputText { text: args[6..].join(" ") },
-        c if c.contains("input swipe") => Command::InputSwipe {
+        c if c.contains("input tap") => Command::Tap { x: args[6].parse().unwrap(), y: args[7].parse().unwrap() },
+        c if c.contains("input text") => Command::Text { text: args[6..].join(" ") },
+        c if c.contains("input swipe") => Command::Swipe {
             x1: args[6].parse().unwrap(),
             y1: args[7].parse().unwrap(),
             x2: args[8].parse().unwrap(),
             y2: args[9].parse().unwrap(),
             duration: args[10].parse().unwrap(),
         },
-        c if c.contains("input keyevent 111") => Command::InputKeyEvent { keycode: 0x01 },
-        c if c.contains("dumpsys window displays") || c.contains("wm size") => Command::DumpsysWindowDisplays,
-        c if c.contains("exec-out screencap -p") => Command::ExecOutScreencap,
+        c if c.contains("input keyevent 111") => Command::KeyEvent { keycode: 0x01 },
+        c if c.contains("dumpsys window displays") || c.contains("wm size") => Command::WindowDisplays,
+        c if c.contains("exec-out screencap -p") => Command::Screencap,
         c if c.contains("am force-stop") || c.contains("input keyevent HOME") => Command::ForceStop,
-        c if c.contains("settings get secure android_id") => Command::GetUUID,
+        c if c.contains("settings get secure android_id") => Command::GetUuid,
         c if c.contains("shell echo") => Command::Echo { text: args[5..].join(" ") }, // Connection Preset - Compatible Mode
         c if c.contains("cat /proc/net/arp")
             || c.contains("exec-out screencap | nc -w 3")
@@ -80,7 +87,7 @@ fn parse_command(args: &[String]) -> Command {
             || c.contains("start-server")
             || c.contains("kill-server") =>
         {
-            Command::IgnoreCommand
+            Command::Ignore
         }
         _ => Command::Unknown(full_command),
     }
@@ -91,11 +98,13 @@ fn execute_command(command: Command) {
         Command::Empty => {
             screenshot();
         }
-        // ========= MAA needs this output =========
+        Command::ToggleDebug => {
+            toggle_debug();
+        }
         Command::Connect => {
             println!("connected to Google Play Games");
         }
-        Command::GetPropVersionRelease => {
+        Command::GetPropRelease => {
             println!("14");
         }
         Command::StartActivity { intent } => {
@@ -109,50 +118,43 @@ fn execute_command(command: Command) {
             println!("GooglePlayGames\tdevice\n");
 
             let version = option_env!("PLAYBRIDGE_VERSION").unwrap_or("local");
-            let config = config();
+            let log = format!("[PlayBridge Version] {}", version);
 
-            println!("------------ PlayBridge Config ------------");
-            println!("Version {}", version);
-            println!("{} / {} / {}", config.title, config.package, config.swipe_speed);
-            println!("-------------------------------------------");
+            println!("{}", log);
+
+            debug_log(LogLevel::Info, LogMode::Nested, &log);
         }
-        Command::DumpsysWindowDisplays => {
+        Command::WindowDisplays => {
             println!("{} {}", DISPLAY_WIDTH, DISPLAY_HEIGHT);
         }
-        Command::GetUUID => {
+        Command::GetUuid => {
             println!("c0ffeeee"); // ^[0-9a-fA-F]{8,}$
         }
-        // =========================================
-        Command::InputTap { x, y } => {
+        Command::Tap { x, y } => {
             input::input_tap(x, y);
         }
-        Command::InputText { text } => {
+        Command::Text { text } => {
             input::input_text(&text);
         }
-        Command::InputSwipe { x1, y1, x2, y2, duration } => {
+        Command::Swipe { x1, y1, x2, y2, duration } => {
             input::input_swipe(x1, y1, x2, y2, duration);
         }
-        Command::InputKeyEvent { keycode } => {
+        Command::KeyEvent { keycode } => {
             input::input_keyevent(keycode);
         }
-        Command::ExecOutScreencap => {
-            if get_hwnd().is_none() {
-                return;
-            }
-
+        Command::Screencap => {
             send_capture();
         }
         Command::ForceStop => {
             input::terminate();
-            display_notification(LogLevel::INFO, "gpg_shutdown", &[]);
+            display_notification(Notification::GpgShutdown);
         }
-        // =========================================
         Command::Echo { text } => {
             println!("{}", text);
         }
-        Command::IgnoreCommand => {}
+        Command::Ignore => {}
         Command::Unknown(cmd) => {
-            display_notification(LogLevel::ERROR, "unknown_command", &[&cmd]);
+            display_notification(Notification::UnknownCommand(cmd));
         }
     }
 }
