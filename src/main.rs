@@ -60,8 +60,7 @@ fn parse_command(args: &[String]) -> Command {
     let full_command = args.join(" ");
     match full_command.as_str() {
         c if c.contains("debug") => Command::ToggleDebug,
-        // 'connect' also matches 'adb disconnect'
-        // MAA doesn't need a response, so it's fine for now
+        c if c.contains("disconnect") => Command::Ignore,
         c if c.contains("connect") => Command::Connect,
         c if c.contains("getprop ro.build.version.release") => Command::GetPropRelease,
         c if c.contains("am start -n") => Command::StartActivity { intent: args[7].clone() },
@@ -115,20 +114,19 @@ fn execute_command(command: Command) {
         }
         Command::Devices => {
             println!("List of devices attached");
-            println!("GooglePlayGames\tdevice\n");
+            println!("GooglePlayGames\tdevice");
 
             let version = option_env!("PLAYBRIDGE_VERSION").unwrap_or("local");
-            let log = format!("[PlayBridge Version] {}", version);
+            let log = format!("PlayBridge {}", version);
 
             println!("{}", log);
-
             debug_log(LogLevel::Info, LogMode::Nested, &log);
         }
         Command::WindowDisplays => {
             println!("{} {}", DISPLAY_WIDTH, DISPLAY_HEIGHT);
         }
         Command::GetUuid => {
-            println!("c0ffeeee"); // ^[0-9a-fA-F]{8,}$
+            println!("0000000000000000");
         }
         Command::Tap { x, y } => {
             input::input_tap(x, y);
