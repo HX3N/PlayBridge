@@ -9,6 +9,7 @@ pub enum LogLevel {
     Info,
     Warn,
     Error,
+    Update,
 }
 
 #[derive(Copy, Clone)]
@@ -33,7 +34,7 @@ pub fn debug_log(level: LogLevel, mode: LogMode, message: &str) {
 
     let now = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
     let level_tag = match level {
-        LogLevel::Info => "INF",
+        LogLevel::Info | LogLevel::Update => "INF",
         LogLevel::Warn => "WRN",
         LogLevel::Error => "ERR",
     };

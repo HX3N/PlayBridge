@@ -2,7 +2,7 @@ use crate::{
     capture::debug_capture,
     config::{DISPLAY_HEIGHT, DISPLAY_WIDTH},
     logging::{debug_log, LogLevel, LogMode},
-    window::{get_hwnd, get_info},
+    window::{find_game_window, get_window_info},
 };
 use std::{
     thread,
@@ -39,17 +39,19 @@ fn get_relative_point(x: i32, y: i32, w: i32, h: i32) -> isize {
 pub fn input_tap(x: i32, y: i32) {
     debug_capture(x, y, None);
 
-    let (hwnd, w, h) = get_info();
+    let (hwnd, w, h) = get_window_info();
     let pos = get_relative_point(x, y, w, h);
 
     send_cancel_mode(hwnd);
+    post_message(hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos));
+    thread::sleep(Duration::from_millis(INPUT_DELAY_MS));
     post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos));
     thread::sleep(Duration::from_millis(INPUT_DELAY_MS));
     post_message(hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(pos));
 }
 
 pub fn input_text(text: &str) {
-    let Some(hwnd) = get_hwnd() else {
+    let Some(hwnd) = find_game_window() else {
         debug_log(LogLevel::Warn, LogMode::Nested, "input_text: Window not found");
         return;
     };
@@ -68,7 +70,7 @@ fn ease_in_out(t: f32) -> f32 {
 }
 
 pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
-    let (hwnd, w, h) = get_info();
+    let (hwnd, w, h) = get_window_info();
     let effective_duration = Duration::from_millis((duration as f32 / SWIPE_SPEED as f32).max(1.0) as u64);
     let start_time = Instant::now();
 
@@ -111,7 +113,7 @@ pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
 }
 
 pub fn input_keyevent(keycode: i32) {
-    let Some(hwnd) = get_hwnd() else {
+    let Some(hwnd) = find_game_window() else {
         debug_log(LogLevel::Warn, LogMode::Nested, "input_keyevent: Window not found");
         return;
     };
@@ -123,7 +125,7 @@ pub fn input_keyevent(keycode: i32) {
 }
 
 pub fn terminate() {
-    let Some(hwnd) = get_hwnd() else {
+    let Some(hwnd) = find_game_window() else {
         debug_log(LogLevel::Warn, LogMode::Nested, "terminate: Window not found");
         return;
     };

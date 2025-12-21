@@ -7,13 +7,13 @@ use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut};
 use crate::config::*;
 use crate::logging::{debug_log, get_debug_folder, LogLevel, LogMode};
 use crate::notification::{display_notification, get_value, set_value, Notification};
-use crate::window::{get_hwnd, get_info, restore_if_minimized};
+use crate::window::{find_game_window, get_window_info, restore_if_minimized};
 
 use win_screenshot::prelude::{capture_window_ex, Area, Using};
 use windows::Win32::UI::HiDpi::{GetWindowDpiAwarenessContext, SetThreadDpiAwarenessContext};
 
 pub fn send_capture() {
-    let Some(hwnd) = get_hwnd() else {
+    let Some(hwnd) = find_game_window() else {
         debug_log(LogLevel::Info, LogMode::Nested, "Window not found, sending black image");
 
         let black_pixels = vec![0u8; (DISPLAY_WIDTH * DISPLAY_HEIGHT * 3) as usize];
@@ -24,14 +24,14 @@ pub fn send_capture() {
 
     restore_if_minimized(hwnd);
 
-    let (hwnd, log_w, log_h) = get_info();
+    let (hwnd, log_w, log_h) = get_window_info();
 
     let img = capture_window(hwnd, log_w, log_h, true);
     img.write_with_encoder(PngEncoder::new(&mut stdout().lock())).unwrap();
 }
 
 pub fn capture() -> DynamicImage {
-    let (hwnd, log_w, log_h) = get_info();
+    let (hwnd, log_w, log_h) = get_window_info();
     capture_window(hwnd, log_w, log_h, false)
 }
 
@@ -85,23 +85,19 @@ fn validate_window_size(log_w: i32, log_h: i32, phys_w: u32, phys_h: u32) {
             &format!("Physical: {}x{} / Logical: {}x{} / Scale: {}%", phys_w, phys_h, log_w, log_h, scale),
         );
 
-        if stored_w == 0 || stored_h == 0 {
-            display_notification(Notification::WindowInfo(phys_w, phys_h));
-        } else {
-            display_notification(Notification::WindowChanged(stored_w, stored_h, phys_w, phys_h));
-        }
+        display_notification(Notification::WindowChanged(stored_w, stored_h, phys_w, phys_h));
     }
 }
 
 pub fn screenshot() {
-    if get_hwnd().is_none() {
+    if find_game_window().is_none() {
         display_notification(Notification::ScreenshotFailed);
         return;
     }
 
     let img = capture();
     let filename = format!("Screenshot_{}.png", Local::now().format("%Y.%m.%d_%H.%M.%S.%3f"));
-    let filepath = format!("{}\\Desktop\\{}", env::var("USERPROFILE").unwrap(), filename);
+    let filepath = format!("{}/Desktop/{}", env::var("USERPROFILE").unwrap(), filename);
     img.write_with_encoder(PngEncoder::new(File::create(&filepath).unwrap())).unwrap();
 
     display_notification(Notification::Screenshot);

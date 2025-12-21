@@ -3,22 +3,21 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::config::{config, get_registry_dword, set_registry_dword};
+use crate::config::{config, get_registry_dword, set_registry_dword, Region, REG_PATH_COOLDOWN, REG_PATH_STATE};
 use crate::logging::{debug_log, LogLevel, LogMode};
 use winrt_toast::{content::text::TextPlacement, register, Scenario, Toast, ToastManager};
 
 const AUM_ID: &str = "PlayBridge";
 const DISPLAY_NAME: &str = "PlayBridge";
 
-const REG_PATH_NOTIFICATION: &str = r"Software\PlayBridge\notification";
 const ICON_DATA: &[u8] = include_bytes!("../assets/icon.png");
 
 pub fn get_value(key: &str) -> u32 {
-    get_registry_dword(key, REG_PATH_NOTIFICATION).unwrap_or(0)
+    get_registry_dword(key, REG_PATH_STATE).unwrap_or(0)
 }
 
 pub fn set_value(key: &str, value: u32) {
-    let _ = set_registry_dword(key, value, REG_PATH_NOTIFICATION);
+    let _ = set_registry_dword(key, value, REG_PATH_STATE);
 }
 
 #[derive(Debug)]
@@ -26,7 +25,6 @@ pub enum Notification {
     Screenshot,
     ScreenshotFailed,
     GpgShutdown,
-    WindowInfo(u32, u32),
     WindowChanged(u32, u32, u32, u32),
     WindowMinimized,
     WindowTooSmall(u32, u32),
@@ -34,14 +32,16 @@ pub enum Notification {
     WindowWrongRatio(f32),
     UnknownCommand(String),
     Panic(String),
+    UpdateAvailable(String),
 }
 
 impl Notification {
     fn level(&self) -> LogLevel {
         match self {
-            Self::Screenshot | Self::GpgShutdown | Self::WindowInfo(..) | Self::WindowChanged(..) => LogLevel::Info,
+            Self::Screenshot | Self::GpgShutdown | Self::WindowChanged(..) => LogLevel::Info,
             Self::WindowMinimized | Self::WindowTooSmall(..) | Self::WindowTooLarge(..) | Self::WindowWrongRatio(..) => LogLevel::Warn,
             Self::ScreenshotFailed | Self::UnknownCommand(..) | Self::Panic(..) => LogLevel::Error,
+            Self::UpdateAvailable(..) => LogLevel::Update,
         }
     }
 
@@ -51,18 +51,47 @@ impl Notification {
     }
 
     fn body(&self) -> String {
+        match config().region {
+            Region::KR => self.body_kr(),
+            _ => self.body_en(),
+        }
+    }
+
+    fn body_en(&self) -> String {
         match self {
             Self::Screenshot => "Screenshot saved to desktop".into(),
-            Self::ScreenshotFailed => "Screenshot failed, can't find the window".into(),
             Self::GpgShutdown => "Google Play Games is shutting down".into(),
-            Self::WindowInfo(w, h) => format!("Window size: {}x{}", w, h),
-            Self::WindowChanged(old_w, old_h, w, h) => format!("Window size changed: {}x{} to {}x{}", old_w, old_h, w, h),
+            Self::WindowChanged(old_w, old_h, w, h) => format!("Window size changed: {}x{} -> {}x{}", old_w, old_h, w, h),
+
             Self::WindowMinimized => "Minimized window is not supported".into(),
             Self::WindowTooSmall(w, h) => format!("Window too small: {}x{}\nBelow minimum 1280x720", w, h),
             Self::WindowTooLarge(w, h) => format!("Window too large: {}x{}\nExceeds maximum 1920x1080", w, h),
             Self::WindowWrongRatio(r) => format!("Window ratio: 16:{:.2} (expected 16:9)", r),
+
+            Self::ScreenshotFailed => "Screenshot failed, can't find the window".into(),
             Self::UnknownCommand(c) => format!("Unknown command:\n{}", c),
             Self::Panic(msg) => format!("PANIC:\n{}", msg),
+
+            Self::UpdateAvailable(v) => format!("New version {} available!\nDownload from GitHub Releases", v),
+        }
+    }
+
+    fn body_kr(&self) -> String {
+        match self {
+            Self::Screenshot => "스크린샷이 바탕화면에 저장되었습니다".into(),
+            Self::GpgShutdown => "Google Play Games가 종료됩니다".into(),
+            Self::WindowChanged(old_w, old_h, w, h) => format!("창 크기 변경 ({}x{} -> {}x{})", old_w, old_h, w, h),
+
+            Self::WindowMinimized => "최소화된 창은 지원되지 않습니다".into(),
+            Self::WindowTooSmall(w, h) => format!("창이 너무 작습니다! ({}x{})\n1280x720 이상이어야 합니다", w, h),
+            Self::WindowTooLarge(w, h) => format!("창이 너무 큽니다! ({}x{})\n1920x1080 이하여야 합니다", w, h),
+            Self::WindowWrongRatio(r) => format!("화면 비율 (16:{:.2})\n16:9 비율이 필요합니다", r),
+
+            Self::ScreenshotFailed => "스크린샷 실패! 창을 찾을 수 없습니다".into(),
+            Self::UnknownCommand(c) => format!("알 수 없는 명령어!\n{}", c),
+            Self::Panic(msg) => format!("PANIC!\n{}", msg),
+
+            Self::UpdateAvailable(v) => format!("신규 버전 {} 업데이트!\nGitHub Releases에서 다운로드해주세요", v),
         }
     }
 
@@ -73,25 +102,45 @@ impl Notification {
             _ => None,
         }
     }
-}
 
-fn get_title_display(level: LogLevel) -> String {
-    let base_text = match level {
-        LogLevel::Info => "ℹ️ Info",
-        LogLevel::Warn => "⚠️ Warning",
-        LogLevel::Error => "⛔ ERROR",
-    };
+    fn title(&self) -> String {
+        let base = match config().region {
+            Region::KR => self.title_kr(),
+            _ => self.title_en(),
+        };
 
-    if config().debug_capture {
-        format!("{} 🛠️", base_text)
-    } else {
-        base_text.to_string()
+        if config().debug_capture {
+            format!("{} 🛠️", base)
+        } else {
+            base
+        }
+    }
+
+    fn title_en(&self) -> String {
+        match self.level() {
+            LogLevel::Update => "🎉 Update",
+            LogLevel::Info => "ℹ️ Info",
+            LogLevel::Warn => "⚠️ Warning",
+            LogLevel::Error => "⛔ ERROR",
+        }
+        .into()
+    }
+
+    fn title_kr(&self) -> String {
+        match self.level() {
+            LogLevel::Update => "🎉 업데이트",
+            LogLevel::Info => "ℹ️ 정보",
+            LogLevel::Warn => "⚠️ 경고",
+            LogLevel::Error => "⛔ 오류",
+        }
+        .into()
     }
 }
 
 pub fn display_notification(notification: Notification) {
     let level = notification.level();
     let tag = notification.tag();
+    let title = notification.title();
     let body = notification.body();
 
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
@@ -102,7 +151,7 @@ pub fn display_notification(notification: Notification) {
         }
     }
 
-    debug_log(level, LogMode::Nested, &body);
+    debug_log(level, LogMode::Nested, &format!("Notification: {}", body));
 
     let icon_path = env::temp_dir().join("playbridge.png");
 
@@ -117,18 +166,18 @@ pub fn display_notification(notification: Notification) {
 
     toast
         .tag(&tag)
-        .text1(get_title_display(level))
+        .text1(title)
         .text2(winrt_toast::content::text::Text::new(&body))
         .text3(winrt_toast::content::text::Text::new(format!("tag: {}", tag)).with_placement(TextPlacement::Attribution));
     toast.scenario(Scenario::Reminder);
 
     manager.show(&toast).unwrap();
 
-    set_registry_dword(&tag, now as u32, REG_PATH_NOTIFICATION).unwrap();
+    set_registry_dword(&tag, now as u32, REG_PATH_COOLDOWN).unwrap();
 }
 
 fn check_notification_registry(tag: &str, now: u64, cooldown_seconds: u64) -> bool {
-    match get_registry_dword(tag, REG_PATH_NOTIFICATION) {
+    match get_registry_dword(tag, REG_PATH_COOLDOWN) {
         Ok(last_time) => now - last_time as u64 >= cooldown_seconds,
         Err(_) => true,
     }
