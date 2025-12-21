@@ -2,7 +2,7 @@ use std::{ffi::c_void, thread, time::Duration};
 
 use regex::Regex;
 
-use crate::config::{config, set_registry_value, Config};
+use crate::config::{config, set_region, Region};
 use crate::logging::{debug_log, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification};
 
@@ -19,34 +19,60 @@ const LOADING_TITLE: &str = "Google Play Games";
 const LOADING_CLASS: &str = "HwndWrapper";
 const LOADING_TIMEOUT: u64 = 3;
 
-const ARKNIGHTS_TITLES: [&str; 3] = ["Arknights", "명일방주", "アークナイツ"];
-
-const CACHE_PATH: &str = "Google\\Play Games\\image_cache";
+const CACHE_PATH: &str = "Google/Play Games/image_cache";
 const WINDOW_RESTORE_DELAY_MS: u64 = 300;
 
 pub fn launch_arknights(intent: &str) {
-    set_package(intent);
-    launch_game();
+    apply_intent_package(intent);
+    start_game_if_needed();
 }
 
-pub fn wait_for_game() {
-    if config().package.is_empty() {
+pub fn ensure_game_ready() {
+    if config().region == Region::Empty {
         debug_log(LogLevel::Info, LogMode::Nested, "Try detecting package from AppData/Local/Google/Play Games");
-        if let Some(package) = detect_arknights_package() {
-            debug_log(LogLevel::Info, LogMode::Nested, &format!("Package set: {} (file)", package));
-            set_registry_value("PACKAGE", &package).unwrap();
-            Config::reload();
+        if let Some(package) = find_installed_package() {
+            if let Some(region) = resolve_region(&package) {
+                set_region(region);
+            }
         } else {
             debug_log(LogLevel::Warn, LogMode::Nested, "Package detection failed");
             return;
         }
     }
-    launch_game();
+    start_game_if_needed();
 }
 
-fn detect_arknights_package() -> Option<String> {
+fn start_game_if_needed() {
+    if find_game_window().is_some() {
+        return;
+    }
+
+    let package = config().region.package().to_string();
+
+    if !is_loading_screen_active() {
+        let _ = open::that(format!("googleplaygames://launch/?id={}", package));
+        debug_log(LogLevel::Info, LogMode::Nested, &format!("Launching Google Play Games: {}", package));
+    }
+
+    for i in 1..=LOADING_TIMEOUT {
+        debug_log(LogLevel::Info, LogMode::Nested, &format!("Waiting for Arknights: {}s / {}s", i, LOADING_TIMEOUT));
+        thread::sleep(Duration::from_secs(1));
+        if find_game_window().is_some() {
+            debug_log(LogLevel::Info, LogMode::Nested, "Arknights ready");
+            return;
+        }
+    }
+
+    if is_loading_screen_active() {
+        debug_log(LogLevel::Info, LogMode::Nested, "Timeout: Google Play Games loading");
+    } else {
+        debug_log(LogLevel::Warn, LogMode::Nested, "Timeout: Google Play Games not responding");
+    }
+}
+
+fn find_installed_package() -> Option<String> {
     let local_app_data = std::env::var("LOCALAPPDATA").ok()?;
-    let cache_path = format!("{}\\{}", local_app_data, CACHE_PATH);
+    let cache_path = format!("{}/{}", local_app_data, CACHE_PATH);
 
     // Ex: com.YoStar__.Arknights.appicon.ico
     let re = Regex::new(r"^com\.YoStar.+\.Arknights").unwrap();
@@ -57,72 +83,42 @@ fn detect_arknights_package() -> Option<String> {
     })
 }
 
-fn set_package(intent: &str) {
+fn apply_intent_package(intent: &str) {
     // Ex: com.YoStar__.Arknights/com.u8.sdk.U8UnityContext
     let package = intent.split('/').next().unwrap_or(intent);
 
-    let current = config().package.clone();
-    if package != current {
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Package set: {} (command)", package));
-        set_registry_value("PACKAGE", package).unwrap();
-        Config::reload();
-    }
-}
-
-fn launch_game() {
-    if get_hwnd().is_some() {
+    if config().region.package() == package {
         return;
     }
 
-    let package = config().package.clone();
-
-    if !is_gpg_loading() {
-        let _ = open::that(format!("googleplaygames://launch/?id={}", package));
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Launching Google Play Games: {}", package));
-    }
-
-    for i in 1..=LOADING_TIMEOUT {
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Waiting for Arknights: {}s / {}s", i, LOADING_TIMEOUT));
-        thread::sleep(Duration::from_secs(1));
-        if get_hwnd().is_some() {
-            debug_log(LogLevel::Info, LogMode::Nested, &format!("Arknights ready: {}s", i));
-            return;
-        }
-    }
-
-    if is_gpg_loading() {
-        debug_log(LogLevel::Info, LogMode::Nested, "Timeout: Google Play Games loading");
-    } else {
-        debug_log(LogLevel::Warn, LogMode::Nested, "Timeout: Google Play Games not responding");
+    if let Some(region) = resolve_region(package) {
+        set_region(region);
     }
 }
 
-fn is_gpg_loading() -> bool {
-    window_list().unwrap().into_iter().any(|i| {
-        if i.window_name == LOADING_TITLE {
-            let hwnd = HWND(i.hwnd as usize as *mut c_void);
-            if let Some(class_name) = get_window_class(hwnd) {
-                return class_name.starts_with(LOADING_CLASS);
-            }
+fn resolve_region(package: &str) -> Option<Region> {
+    for region in [Region::KR, Region::JP, Region::EN] {
+        if package.starts_with(region.package()) {
+            return Some(region);
         }
-        false
-    })
+    }
+    None
 }
 
-pub fn get_hwnd() -> Option<HWND> {
+pub fn find_game_window() -> Option<HWND> {
     let windows = window_list().ok()?;
-    let current_title = config().title.clone();
+    let current_title = config().region.title();
 
-    if let Some(hwnd) = try_find_window(&windows, &current_title) {
-        return Some(hwnd);
+    if !current_title.is_empty() {
+        if let Some(hwnd) = match_window_by_title(&windows, current_title) {
+            return Some(hwnd);
+        }
     }
 
-    for &title in &ARKNIGHTS_TITLES {
-        if title != current_title {
-            if let Some(hwnd) = try_find_window(&windows, title) {
-                debug_log(LogLevel::Info, LogMode::Nested, &format!("Title set: {}", title));
-                set_registry_value("TITLE", title).unwrap();
-                Config::reload();
+    for region in [Region::KR, Region::JP, Region::EN] {
+        if region.title() != current_title {
+            if let Some(hwnd) = match_window_by_title(&windows, region.title()) {
+                set_region(region);
                 return Some(hwnd);
             }
         }
@@ -131,7 +127,7 @@ pub fn get_hwnd() -> Option<HWND> {
     None
 }
 
-fn try_find_window(windows: &[HwndName], title: &str) -> Option<HWND> {
+fn match_window_by_title(windows: &[HwndName], title: &str) -> Option<HWND> {
     let pattern = format!("^{}( - .+)?$", title);
     let re = Regex::new(&pattern).ok()?;
 
@@ -145,14 +141,14 @@ fn try_find_window(windows: &[HwndName], title: &str) -> Option<HWND> {
         if class_name == CROSVM_CLASS {
             Some(hwnd)
         } else if class_name.starts_with(LOADING_CLASS) {
-            find_crosvm(hwnd)
+            find_crosvm_child(hwnd)
         } else {
             None
         }
     })
 }
 
-fn find_crosvm(parent_hwnd: HWND) -> Option<HWND> {
+fn find_crosvm_child(parent_hwnd: HWND) -> Option<HWND> {
     let crosvm_class_wide: Vec<u16> = CROSVM_CLASS.encode_utf16().chain(Some(0)).collect();
 
     unsafe {
@@ -160,6 +156,18 @@ fn find_crosvm(parent_hwnd: HWND) -> Option<HWND> {
             .ok()
             .filter(|h| !h.0.is_null())
     }
+}
+
+fn is_loading_screen_active() -> bool {
+    window_list().unwrap().into_iter().any(|i| {
+        if i.window_name == LOADING_TITLE {
+            let hwnd = HWND(i.hwnd as usize as *mut c_void);
+            if let Some(class_name) = get_window_class(hwnd) {
+                return class_name.starts_with(LOADING_CLASS);
+            }
+        }
+        false
+    })
 }
 
 fn get_window_class(hwnd: HWND) -> Option<String> {
@@ -175,8 +183,8 @@ fn get_window_class(hwnd: HWND) -> Option<String> {
     }
 }
 
-pub fn get_info() -> (HWND, i32, i32) {
-    let hwnd = get_hwnd().expect("Failed to find window (get_info)");
+pub fn get_window_info() -> (HWND, i32, i32) {
+    let hwnd = find_game_window().expect("Failed to find window (get_window_info)");
     let mut rect = RECT::default();
 
     let (w, h) = if unsafe { GetClientRect(hwnd, &mut rect) }.is_ok() { (rect.right - rect.left, rect.bottom - rect.top) } else { (0, 0) };

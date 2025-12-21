@@ -9,6 +9,7 @@ pub enum LogLevel {
     Info,
     Warn,
     Error,
+    Update,
 }
 
 #[derive(Copy, Clone)]
@@ -20,20 +21,20 @@ pub enum LogMode {
 
 pub fn get_debug_folder() -> PathBuf {
     let exe_dir = env::current_exe().unwrap().parent().unwrap().to_path_buf();
-    let folder_path = exe_dir.join("PlayBridge");
+    let folder_path = exe_dir.join("debug");
     let _ = std::fs::create_dir_all(&folder_path);
     folder_path
 }
 
 pub fn debug_log(level: LogLevel, mode: LogMode, message: &str) {
-    let log_path = get_debug_folder().join("debug.log");
+    let log_path = get_debug_folder().join("PlayBridge.log");
     let Ok(mut file) = OpenOptions::new().append(true).create(true).open(log_path) else {
         return;
     };
 
     let now = Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
     let level_tag = match level {
-        LogLevel::Info => "INF",
+        LogLevel::Info | LogLevel::Update => "INF",
         LogLevel::Warn => "WRN",
         LogLevel::Error => "ERR",
     };

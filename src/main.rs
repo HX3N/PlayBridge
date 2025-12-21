@@ -8,10 +8,10 @@ mod window;
 use std::{env, time::Instant};
 
 use crate::capture::{screenshot, send_capture};
-use crate::config::{toggle_debug, Config, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use crate::config::{check_for_update, check_version, toggle_debug, Config, DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use crate::logging::{debug_log, panic_hook, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification};
-use crate::window::{launch_arknights, wait_for_game};
+use crate::window::{ensure_game_ready, launch_arknights};
 
 #[ctor::ctor]
 fn init() {
@@ -25,7 +25,7 @@ fn main() {
 
     debug_log(LogLevel::Info, LogMode::Start, &args.join(" "));
 
-    wait_for_game();
+    ensure_game_ready();
 
     let command = parse_command(&args);
     execute_command(command);
@@ -96,6 +96,7 @@ fn execute_command(command: Command) {
     match command {
         Command::Empty => {
             screenshot();
+            check_for_update();
         }
         Command::ToggleDebug => {
             toggle_debug();
@@ -116,11 +117,8 @@ fn execute_command(command: Command) {
             println!("List of devices attached");
             println!("GooglePlayGames\tdevice");
 
-            let version = option_env!("PLAYBRIDGE_VERSION").unwrap_or("local");
-            let log = format!("PlayBridge {}", version);
-
-            println!("{}", log);
-            debug_log(LogLevel::Info, LogMode::Nested, &log);
+            check_version();
+            check_for_update();
         }
         Command::WindowDisplays => {
             println!("{} {}", DISPLAY_WIDTH, DISPLAY_HEIGHT);
