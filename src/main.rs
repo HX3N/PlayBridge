@@ -59,7 +59,7 @@ fn parse_command(args: &[String]) -> Command {
     }
     let full_command = args.join(" ");
     match full_command.as_str() {
-        c if c.contains("debug") => Command::ToggleDebug,
+        c if c.contains("--debug") => Command::ToggleDebug,
         c if c.contains("disconnect") => Command::Ignore,
         c if c.contains("connect") => Command::Connect,
         c if c.contains("getprop ro.build.version.release") => Command::GetPropRelease,

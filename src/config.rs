@@ -14,7 +14,7 @@ const REPOSITORY_URL: &str = "https://api.github.com/repos/HX3N/PlayBridge/relea
 pub const REG_PATH_CONFIG: &str = r"Software\PlayBridge\config";
 pub const REG_PATH_STATE: &str = r"Software\PlayBridge\state";
 pub const REG_PATH_COOLDOWN: &str = r"Software\PlayBridge\cooldown";
-pub const UPDATE_CHECK_COOLDOWN: u64 = 86400;
+pub const UPDATE_CHECK_COOLDOWN: u64 = 60 * 60 * 1; // 1 hour
 
 const DEVELOPMENT_VERSION: &str = "development";
 

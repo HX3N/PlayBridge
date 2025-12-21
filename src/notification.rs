@@ -25,7 +25,7 @@ pub enum Notification {
     Screenshot,
     ScreenshotFailed,
     GpgShutdown,
-    WindowChanged(u32, u32, u32, u32),
+    WindowChanged(u32, u32),
     WindowMinimized,
     WindowTooSmall(u32, u32),
     WindowTooLarge(u32, u32),
@@ -61,44 +61,44 @@ impl Notification {
         match self {
             Self::Screenshot => "Screenshot saved to desktop".into(),
             Self::GpgShutdown => "Google Play Games is shutting down".into(),
-            Self::WindowChanged(old_w, old_h, w, h) => format!("Window size changed: {}x{} -> {}x{}", old_w, old_h, w, h),
+            Self::WindowChanged(w, h) => format!("Window size changed ({}x{})", w, h),
 
             Self::WindowMinimized => "Minimized window is not supported".into(),
-            Self::WindowTooSmall(w, h) => format!("Window too small: {}x{}\nBelow minimum 1280x720", w, h),
-            Self::WindowTooLarge(w, h) => format!("Window too large: {}x{}\nExceeds maximum 1920x1080", w, h),
-            Self::WindowWrongRatio(r) => format!("Window ratio: 16:{:.2} (expected 16:9)", r),
+            Self::WindowTooSmall(w, h) => format!("Window too small ({}x{})\nMAA may not work properly", w, h),
+            Self::WindowTooLarge(w, h) => format!("Window too large ({}x{})\nMAA may not work properly", w, h),
+            Self::WindowWrongRatio(r) => format!("Wrong aspect ratio (16:{:.2})\nPlease set to 16:9", r),
 
             Self::ScreenshotFailed => "Screenshot failed, can't find the window".into(),
-            Self::UnknownCommand(c) => format!("Unknown command:\n{}", c),
-            Self::Panic(msg) => format!("PANIC:\n{}", msg),
+            Self::UnknownCommand(c) => format!("Unknown command\n{}", c),
+            Self::Panic(msg) => format!("Fatal error\n{}", msg),
 
-            Self::UpdateAvailable(v) => format!("New version {} available!\nDownload from GitHub Releases", v),
+            Self::UpdateAvailable(v) => format!("New version found ({})\nDownload from GitHub Releases", v),
         }
     }
 
     fn body_kr(&self) -> String {
         match self {
-            Self::Screenshot => "스크린샷이 바탕화면에 저장되었습니다".into(),
-            Self::GpgShutdown => "Google Play Games가 종료됩니다".into(),
-            Self::WindowChanged(old_w, old_h, w, h) => format!("창 크기 변경 ({}x{} -> {}x{})", old_w, old_h, w, h),
+            Self::Screenshot => "스크린샷이 바탕화면에 저장됐어요".into(),
+            Self::GpgShutdown => "Google Play Games가 종료됐어요".into(),
+            Self::WindowChanged(w, h) => format!("창 크기가 변경됐어요 ({}x{})", w, h),
 
-            Self::WindowMinimized => "최소화된 창은 지원되지 않습니다".into(),
-            Self::WindowTooSmall(w, h) => format!("창이 너무 작습니다! ({}x{})\n1280x720 이상이어야 합니다", w, h),
-            Self::WindowTooLarge(w, h) => format!("창이 너무 큽니다! ({}x{})\n1920x1080 이하여야 합니다", w, h),
-            Self::WindowWrongRatio(r) => format!("화면 비율 (16:{:.2})\n16:9 비율이 필요합니다", r),
+            Self::WindowMinimized => "최소화된 창은 지원하지 않아요".into(),
+            Self::WindowTooSmall(w, h) => format!("창 크기가 너무 작아요 ({}x{})\nMAA가 제대로 동작하지 않을 수 있어요", w, h),
+            Self::WindowTooLarge(w, h) => format!("창 크기가 너무 커요 ({}x{})\nMAA가 제대로 동작하지 않을 수 있어요", w, h),
+            Self::WindowWrongRatio(r) => format!("화면 비율이 맞지 않아요 (16:{:.2})\n16:9 비율로 설정해주세요", r),
 
-            Self::ScreenshotFailed => "스크린샷 실패! 창을 찾을 수 없습니다".into(),
-            Self::UnknownCommand(c) => format!("알 수 없는 명령어!\n{}", c),
-            Self::Panic(msg) => format!("PANIC!\n{}", msg),
+            Self::ScreenshotFailed => "스크린샷 실패, 창을 찾을 수 없어요".into(),
+            Self::UnknownCommand(c) => format!("알 수 없는 명령어\n{}", c),
+            Self::Panic(msg) => format!("치명적인 오류 발생\n{}", msg),
 
-            Self::UpdateAvailable(v) => format!("신규 버전 {} 업데이트!\nGitHub Releases에서 다운로드해주세요", v),
+            Self::UpdateAvailable(v) => format!("신규 버전을 발견했어요 ({})\nGitHub Releases에서 다운로드해주세요", v),
         }
     }
 
     fn cooldown(&self) -> Option<u64> {
         match self {
-            Self::WindowMinimized | Self::WindowTooSmall(..) | Self::WindowTooLarge(..) | Self::WindowWrongRatio(..) => Some(20),
-            Self::WindowChanged(..) => Some(1),
+            Self::WindowTooSmall(..) | Self::WindowTooLarge(..) | Self::WindowWrongRatio(..) => Some(10),
+            Self::WindowMinimized | Self::WindowChanged(..) => Some(2),
             _ => None,
         }
     }

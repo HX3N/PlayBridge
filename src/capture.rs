@@ -12,6 +12,8 @@ use crate::window::{find_game_window, get_window_info, restore_if_minimized};
 use win_screenshot::prelude::{capture_window_ex, Area, Using};
 use windows::Win32::UI::HiDpi::{GetWindowDpiAwarenessContext, SetThreadDpiAwarenessContext};
 
+const MAX_WINDOW_SIZE: (u32, u32) = ((DISPLAY_WIDTH as f32 * 1.5) as u32, (DISPLAY_HEIGHT as f32 * 1.5) as u32);
+
 pub fn send_capture() {
     let Some(hwnd) = find_game_window() else {
         debug_log(LogLevel::Info, LogMode::Nested, "Window not found, sending black image");
@@ -67,7 +69,7 @@ fn validate_window_size(log_w: i32, log_h: i32, phys_w: u32, phys_h: u32) {
         return;
     }
 
-    if phys_w > (DISPLAY_WIDTH as f32 * 1.5) as u32 || phys_h > (DISPLAY_HEIGHT as f32 * 1.5) as u32 {
+    if phys_w > MAX_WINDOW_SIZE.0 || phys_h > MAX_WINDOW_SIZE.1 {
         display_notification(Notification::WindowTooLarge(phys_w, phys_h));
         return;
     }
@@ -85,7 +87,7 @@ fn validate_window_size(log_w: i32, log_h: i32, phys_w: u32, phys_h: u32) {
             &format!("Physical: {}x{} / Logical: {}x{} / Scale: {}%", phys_w, phys_h, log_w, log_h, scale),
         );
 
-        display_notification(Notification::WindowChanged(stored_w, stored_h, phys_w, phys_h));
+        display_notification(Notification::WindowChanged(phys_w, phys_h));
     }
 }
 

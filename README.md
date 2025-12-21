@@ -24,7 +24,7 @@ Then, go to **MAA > Settings > Connection** and configure as follows:
 
 ## Debug Capture
 
-Run `.\PlayBridgeADB debug` in the directory where the executable is located to toggle debug mode<br>
+Run `.\PlayBridgeADB --debug` in the directory where the executable is located to toggle debug mode<br>
 You can also modify the registry value directly at `Software\PlayBridge\config\DEBUG_CAPTURE`
 
 ## Screenshot
