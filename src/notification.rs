@@ -30,6 +30,7 @@ pub enum Notification {
     WindowChanged(u32, u32, u32, u32),
     WindowMinimized,
     WindowTooSmall(u32, u32),
+    WindowTooLarge(u32, u32),
     WindowWrongRatio(f32),
     UnknownCommand(String),
     Panic(String),
@@ -39,7 +40,7 @@ impl Notification {
     fn level(&self) -> LogLevel {
         match self {
             Self::Screenshot | Self::GpgShutdown | Self::WindowInfo(..) | Self::WindowChanged(..) => LogLevel::Info,
-            Self::WindowMinimized | Self::WindowTooSmall(..) | Self::WindowWrongRatio(..) => LogLevel::Warn,
+            Self::WindowMinimized | Self::WindowTooSmall(..) | Self::WindowTooLarge(..) | Self::WindowWrongRatio(..) => LogLevel::Warn,
             Self::ScreenshotFailed | Self::UnknownCommand(..) | Self::Panic(..) => LogLevel::Error,
         }
     }
@@ -57,7 +58,8 @@ impl Notification {
             Self::WindowInfo(w, h) => format!("Window size: {}x{}", w, h),
             Self::WindowChanged(old_w, old_h, w, h) => format!("Window size changed: {}x{} to {}x{}", old_w, old_h, w, h),
             Self::WindowMinimized => "Minimized window is not supported".into(),
-            Self::WindowTooSmall(w, h) => format!("Window too small: {}x{}", w, h),
+            Self::WindowTooSmall(w, h) => format!("Window too small: {}x{}\nBelow minimum 1280x720", w, h),
+            Self::WindowTooLarge(w, h) => format!("Window too large: {}x{}\nExceeds maximum 1920x1080", w, h),
             Self::WindowWrongRatio(r) => format!("Window ratio: 16:{:.2} (expected 16:9)", r),
             Self::UnknownCommand(c) => format!("Unknown command:\n{}", c),
             Self::Panic(msg) => format!("PANIC:\n{}", msg),
@@ -66,7 +68,7 @@ impl Notification {
 
     fn cooldown(&self) -> Option<u64> {
         match self {
-            Self::WindowMinimized | Self::WindowTooSmall(..) | Self::WindowWrongRatio(..) => Some(20),
+            Self::WindowMinimized | Self::WindowTooSmall(..) | Self::WindowTooLarge(..) | Self::WindowWrongRatio(..) => Some(20),
             Self::WindowChanged(..) => Some(1),
             _ => None,
         }
@@ -92,8 +94,6 @@ pub fn display_notification(notification: Notification) {
     let tag = notification.tag();
     let body = notification.body();
 
-    debug_log(level, LogMode::Nested, &body);
-
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
     if let Some(cooldown) = notification.cooldown() {
@@ -102,7 +102,9 @@ pub fn display_notification(notification: Notification) {
         }
     }
 
-    let icon_path = env::temp_dir().join("playbridge_icon.png");
+    debug_log(level, LogMode::Nested, &body);
+
+    let icon_path = env::temp_dir().join("playbridge.png");
 
     if !icon_path.exists() {
         fs::write(&icon_path, ICON_DATA).unwrap();
