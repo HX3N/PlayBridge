@@ -85,7 +85,7 @@ fn launch_game() {
         debug_log(LogLevel::Info, LogMode::Nested, &format!("Waiting for Arknights: {}s / {}s", i, LOADING_TIMEOUT));
         thread::sleep(Duration::from_secs(1));
         if get_hwnd().is_some() {
-            debug_log(LogLevel::Info, LogMode::Nested, &format!("Arknights ready: {}s", i));
+            debug_log(LogLevel::Info, LogMode::Nested, "Arknights ready");
             return;
         }
     }

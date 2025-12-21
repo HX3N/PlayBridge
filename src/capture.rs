@@ -133,7 +133,9 @@ pub fn debug_capture(x: i32, y: i32, end_point: Option<(i32, i32)>) {
     }
 
     let filename = format!("Debug_{}.png", Local::now().format("%Y.%m.%d_%H.%M.%S.%3f"));
-    let filepath = get_debug_folder().join(&filename);
+    let capture_folder = get_debug_folder().join("PlayBridge");
+    let _ = std::fs::create_dir_all(&capture_folder);
+    let filepath = capture_folder.join(&filename);
 
     let dynamic_img = DynamicImage::ImageRgb8(img_rgb);
     dynamic_img.write_with_encoder(PngEncoder::new(File::create(&filepath).unwrap())).unwrap();
