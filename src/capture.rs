@@ -1,7 +1,7 @@
 use std::{env, fs::File, io::stdout};
 
 use chrono::Local;
-use image::{codecs::png::PngEncoder, imageops::FilterType::Lanczos3, DynamicImage, Rgb, RgbaImage};
+use image::{codecs::png::PngEncoder, DynamicImage, Rgb, RgbaImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut};
 
 use crate::config::*;
@@ -11,6 +11,8 @@ use crate::window::{find_game_window, get_window_info, restore_if_minimized};
 
 use win_screenshot::prelude::{capture_window_ex, Area, Using};
 use windows::Win32::UI::HiDpi::{GetWindowDpiAwarenessContext, SetThreadDpiAwarenessContext};
+
+use fast_image_resize::{images::Image, PixelType, ResizeAlg, ResizeOptions, Resizer};
 
 const MAX_WINDOW_SIZE: (u32, u32) = ((DISPLAY_WIDTH as f32 * 1.5) as u32, (DISPLAY_HEIGHT as f32 * 1.5) as u32);
 
@@ -51,9 +53,15 @@ fn capture_window(hwnd: windows::Win32::Foundation::HWND, log_w: i32, log_h: i32
         validate_window_size(log_w, log_h, phys_w, phys_h);
     }
 
-    let img = DynamicImage::ImageRgba8(RgbaImage::from_raw(phys_w, phys_h, buf.pixels).unwrap());
+    let src_image = Image::from_vec_u8(phys_w, phys_h, buf.pixels, PixelType::U8x4).unwrap();
+    let mut dst_image = Image::new(DISPLAY_WIDTH, DISPLAY_HEIGHT, PixelType::U8x4);
 
-    img.resize(DISPLAY_WIDTH, DISPLAY_HEIGHT, Lanczos3)
+    let mut resizer = Resizer::new();
+    let options = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(fast_image_resize::FilterType::Lanczos3));
+
+    resizer.resize(&src_image, &mut dst_image, &options).unwrap();
+
+    DynamicImage::ImageRgba8(RgbaImage::from_raw(DISPLAY_WIDTH, DISPLAY_HEIGHT, dst_image.into_vec()).unwrap())
 }
 
 fn validate_window_size(log_w: i32, log_h: i32, phys_w: u32, phys_h: u32) {
