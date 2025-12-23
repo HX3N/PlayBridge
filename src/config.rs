@@ -47,6 +47,21 @@ pub fn set_registry_value<T: winreg::types::ToRegValue>(key_name: &str, value: T
     Ok(())
 }
 
+pub fn set_benchmark_mode(count: u32) {
+    let _ = set_registry_dword("BENCHMARK_COUNT", count, REG_PATH_STATE);
+    debug_log(LogLevel::Info, LogMode::Nested, &format!("Benchmark Mode Set: {}", count));
+}
+
+pub fn check_benchmark_mode() -> bool {
+    let count = get_registry_dword("BENCHMARK_COUNT", REG_PATH_STATE).unwrap_or(0);
+    if count > 0 {
+        let _ = set_registry_dword("BENCHMARK_COUNT", count - 1, REG_PATH_STATE);
+        debug_log(LogLevel::Info, LogMode::Nested, &format!("Benchmark Mode Active (Remaining: {})", count - 1));
+        return true;
+    }
+    false
+}
+
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum Region {
     #[default]
@@ -115,12 +130,17 @@ pub fn set_region(region: Region) {
 
 pub struct Config {
     pub debug_capture: bool,
+    pub force_encode: bool,
     pub region: Region,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { debug_capture: get_reg_value("DEBUG_CAPTURE", 0u32) != 0, region: Region::from_str(&get_reg_value("REGION", String::new())) }
+        Self {
+            debug_capture: get_reg_value("DEBUG_CAPTURE", 0u32) != 0,
+            force_encode: get_reg_value("FORCE_ENCODE", 0u32) != 0,
+            region: Region::from_str(&get_reg_value("REGION", String::new())),
+        }
     }
 }
 
@@ -205,16 +225,24 @@ pub fn check_for_update() {
     }
 }
 
-pub fn toggle_debug() {
+fn toggle_config(key_name: &str) {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu.create_subkey(REG_PATH_CONFIG).unwrap();
-    let current_val: u32 = key.get_value("DEBUG_CAPTURE").unwrap_or(0);
+    let current_val: u32 = key.get_value(key_name).unwrap_or(0);
     let new_val: u32 = if current_val == 0 { 1 } else { 0 };
-    key.set_value("DEBUG_CAPTURE", &new_val).unwrap();
+    key.set_value(key_name, &new_val).unwrap();
 
     let status = if new_val == 1 { "ON" } else { "OFF" };
-    let msg = format!("DEBUG_CAPTURE: {}", status);
+    let msg = format!("{}: {}", key_name, status);
     println!("{}", msg);
 
     debug_log(LogLevel::Info, LogMode::Nested, &msg);
+}
+
+pub fn toggle_debug() {
+    toggle_config("DEBUG_CAPTURE");
+}
+
+pub fn toggle_encode() {
+    toggle_config("FORCE_ENCODE");
 }

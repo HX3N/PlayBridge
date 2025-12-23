@@ -1,4 +1,4 @@
-use std::{env, fs::File, io::stdout};
+use std::{env, fs::File, io::stdout, io::Write, net::TcpStream};
 
 use chrono::Local;
 use image::{codecs::png::PngEncoder, DynamicImage, Rgb, RgbaImage};
@@ -16,13 +16,23 @@ use fast_image_resize::{images::Image, PixelType, ResizeAlg, ResizeOptions, Resi
 
 const MAX_WINDOW_SIZE: (u32, u32) = ((DISPLAY_WIDTH as f32 * 1.5) as u32, (DISPLAY_HEIGHT as f32 * 1.5) as u32);
 
-pub fn send_capture() {
-    let Some(hwnd) = find_game_window() else {
-        debug_log(LogLevel::Info, LogMode::Nested, "Window not found, sending black image");
+const LOOPBACK_IP: &str = "127.0.0.1";
 
-        let black_pixels = vec![0u8; (DISPLAY_WIDTH * DISPLAY_HEIGHT * 3) as usize];
-        let img = DynamicImage::ImageRgb8(image::RgbImage::from_raw(DISPLAY_WIDTH, DISPLAY_HEIGHT, black_pixels).unwrap());
-        img.write_with_encoder(PngEncoder::new(&mut stdout().lock())).unwrap();
+pub fn send_capture() {
+    if check_benchmark_mode() {
+        // During MAA's "fastest way to screencap" test, intentionally delay to ensure RawByNc is selected
+        // If FORCE_ENCODE is set, delay RawByNc instead to force Encode selection
+        if !config().force_encode {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        send_black_frame_png();
+        return;
+    }
+
+    let Some(hwnd) = find_game_window() else {
+        debug_log(LogLevel::Info, LogMode::Nested, "Window not found: Sent Black Frame (Encode)");
+        send_black_frame_png();
         return;
     };
 
@@ -32,6 +42,95 @@ pub fn send_capture() {
 
     let img = capture_window(hwnd, log_w, log_h, true);
     img.write_with_encoder(PngEncoder::new(&mut stdout().lock())).unwrap();
+}
+
+pub fn send_capture_nc(port: u16) {
+    if check_benchmark_mode() {
+        debug_log(LogLevel::Info, LogMode::Nested, &format!("RawByNc: Connecting to {}:{}", LOOPBACK_IP, port));
+
+        // During MAA's "fastest way to screencap" test, intentionally delay to ensure RawByNc is selected
+        // If FORCE_ENCODE is set, delay RawByNc instead to force Encode selection
+        if config().force_encode {
+            debug_log(LogLevel::Warn, LogMode::Nested, "FORCE_ENCODE enabled: Recommended to use RawByNc");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        send_black_frame_nc(port);
+        debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: Sent Black Frame (RawByNc)");
+        return;
+    }
+
+    let Some(hwnd) = find_game_window() else {
+        debug_log(LogLevel::Info, LogMode::Nested, "Window not found: Sent Black Frame (RawByNc)");
+        send_black_frame_nc(port);
+        return;
+    };
+
+    restore_if_minimized(hwnd);
+    let (hwnd, log_w, log_h) = get_window_info();
+
+    // Capture & Resize
+    let img_dynamic = capture_window(hwnd, log_w, log_h, true);
+    let width = img_dynamic.width();
+    let height = img_dynamic.height();
+    let pixels = img_dynamic.to_rgba8().into_raw();
+
+    let mut stream = match TcpStream::connect((LOOPBACK_IP, port)) {
+        Ok(s) => s,
+        Err(e) => {
+            debug_log(LogLevel::Error, LogMode::Nested, &format!("Socket Connect Failed: {}", e));
+            return;
+        }
+    };
+
+    // Protocol: [Width:4][Height:4][Format:4][RGBA Data] / Format=1 (RGBA_8888)
+    let mut buffer = Vec::with_capacity(12 + pixels.len());
+    buffer.extend_from_slice(&width.to_le_bytes());
+    buffer.extend_from_slice(&height.to_le_bytes());
+    buffer.extend_from_slice(&1u32.to_le_bytes());
+    buffer.extend_from_slice(&pixels);
+
+    // Ensure last alpha byte is 0xFF for MAA validation
+    if let Some(last) = buffer.last_mut() {
+        *last = 0xFF;
+    }
+
+    if let Err(e) = stream.write_all(&buffer) {
+        debug_log(LogLevel::Error, LogMode::Nested, &format!("Socket Send Failed: {}", e));
+    }
+}
+
+fn send_black_frame_png() {
+    use image::{ImageBuffer, Rgba};
+    let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_pixel(DISPLAY_WIDTH, DISPLAY_HEIGHT, Rgba([0, 0, 0, 255]));
+    img.write_with_encoder(PngEncoder::new(&mut stdout().lock())).unwrap();
+}
+
+fn send_black_frame_nc(port: u16) {
+    match TcpStream::connect((LOOPBACK_IP, port)) {
+        Ok(mut stream) => {
+            let width = DISPLAY_WIDTH;
+            let height = DISPLAY_HEIGHT;
+            let buffer_size = (width * height * 4) as usize;
+
+            let mut buffer = Vec::with_capacity(12 + buffer_size);
+            buffer.extend_from_slice(&width.to_le_bytes());
+            buffer.extend_from_slice(&height.to_le_bytes());
+            buffer.extend_from_slice(&1u32.to_le_bytes());
+
+            let pixel_count = (width * height) as usize;
+            let mut pixels = Vec::with_capacity(pixel_count * 4);
+            for _ in 0..pixel_count {
+                pixels.extend_from_slice(&[0, 0, 0, 255]);
+            }
+            buffer.extend_from_slice(&pixels);
+
+            stream.write_all(&buffer).unwrap();
+        }
+        Err(e) => {
+            debug_log(LogLevel::Error, LogMode::Nested, &format!("RawByNc Black Frame Socket Error: {}", e));
+        }
+    }
 }
 
 pub fn capture() -> DynamicImage {
