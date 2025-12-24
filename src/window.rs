@@ -17,7 +17,7 @@ const CROSVM_CLASS: &str = "CROSVM_1";
 
 const LOADING_TITLE: &str = "Google Play Games";
 const LOADING_CLASS: &str = "HwndWrapper";
-const LOADING_TIMEOUT: u64 = 2;
+const LOADING_TIMEOUT_SECS: u64 = 2;
 
 const CACHE_PATH: &str = "Google/Play Games/image_cache";
 const WINDOW_RESTORE_DELAY_MS: u64 = 300;
@@ -54,8 +54,8 @@ fn start_game_if_needed() {
         debug_log(LogLevel::Info, LogMode::Nested, &format!("Launching Google Play Games: {}", package));
     }
 
-    for i in 1..=LOADING_TIMEOUT {
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Waiting for Arknights: {}s / {}s", i, LOADING_TIMEOUT));
+    for i in 1..=LOADING_TIMEOUT_SECS {
+        debug_log(LogLevel::Info, LogMode::Nested, &format!("Waiting for Arknights: {}s / {}s", i, LOADING_TIMEOUT_SECS));
         thread::sleep(Duration::from_secs(1));
         if find_game_window().is_some() {
             debug_log(LogLevel::Info, LogMode::Nested, "Arknights ready");

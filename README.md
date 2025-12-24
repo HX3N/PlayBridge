@@ -28,10 +28,3 @@ Running the executable directly captures a screenshot of **Google Play Games** a
 
 Run `.\PlayBridgeADB --debug` in the directory where the executable is located to toggle debug mode<br>
 You can also modify the registry value directly at `Software\PlayBridge\config\DEBUG_CAPTURE`
-
-## Force Encode
-
-Run `.\PlayBridgeADB --encode` in the directory where the executable is located to toggle force encode mode<br>
-You can also modify the registry value directly at `Software\PlayBridge\config\FORCE_ENCODE`
-
-~~Why would anyone want to trigger the slower one?~~

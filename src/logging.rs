@@ -1,4 +1,10 @@
-use std::{env, fs::OpenOptions, io::Write, panic, path::PathBuf};
+use std::{
+    env,
+    fs::{self, OpenOptions},
+    io::Write,
+    panic,
+    path::PathBuf,
+};
 
 use chrono::Local;
 
@@ -50,7 +56,7 @@ pub fn debug_log(level: LogLevel, mode: LogMode, message: &str) {
     let _ = writeln!(file, "{}", log);
 }
 
-pub fn panic_hook() {
+pub fn register_panic_hook() {
     panic::set_hook(Box::new(|info| {
         let msg = info
             .payload()
@@ -66,4 +72,21 @@ pub fn panic_hook() {
 
         display_notification(Notification::Panic(format!("{} - {}", location, msg)));
     }));
+}
+
+const MAX_LOG_FILE_SIZE: u64 = 1 * 1024 * 1024; // 1MB
+const BACKUP_LOG_NAME: &str = "PlayBridge.bak.log";
+
+pub fn rotate_log() {
+    let log_path = get_debug_folder().join("PlayBridge.log");
+
+    if let Ok(metadata) = fs::metadata(&log_path) {
+        if metadata.len() >= MAX_LOG_FILE_SIZE {
+            let backup_path = get_debug_folder().join(BACKUP_LOG_NAME);
+
+            if let Err(e) = fs::rename(&log_path, &backup_path) {
+                debug_log(LogLevel::Error, LogMode::Start, &format!("Failed to rotate log: {}", e));
+            }
+        }
+    }
 }

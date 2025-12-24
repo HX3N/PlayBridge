@@ -8,27 +8,27 @@ mod window;
 use std::{env, time::Instant};
 
 use crate::capture::{screenshot, send_capture, send_capture_nc};
-use crate::config::set_benchmark_mode;
-use crate::config::{check_for_update, check_version, toggle_debug, toggle_encode, Config, DISPLAY_HEIGHT, DISPLAY_WIDTH};
-use crate::logging::{debug_log, panic_hook, LogLevel, LogMode};
+use crate::config::{check_for_update, check_version, toggle_debug, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use crate::config::{peek_benchmark_mode, set_benchmark_mode};
+use crate::logging::{debug_log, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification};
 use crate::window::{ensure_game_ready, launch_arknights};
 
-#[ctor::ctor]
-fn init() {
-    panic_hook();
-    Config::default();
-}
-
 fn main() {
     let start = Instant::now();
+
+    logging::register_panic_hook();
+    logging::rotate_log();
+
     let raw_args: Vec<String> = env::args().collect();
     let full_joined = raw_args.join(" ");
     let args: Vec<String> = full_joined.split_whitespace().map(|s| s.to_string()).collect();
 
     debug_log(LogLevel::Info, LogMode::Start, &full_joined);
 
-    ensure_game_ready();
+    if !peek_benchmark_mode() {
+        ensure_game_ready();
+    }
 
     let command = parse_command(&args);
     execute_command(command);
@@ -39,7 +39,6 @@ fn main() {
 enum Command {
     Empty,
     ToggleDebug,
-    ToggleEncode,
     Connect,
     GetPropRelease,
     StartActivity { intent: String },
@@ -65,7 +64,6 @@ fn parse_command(args: &[String]) -> Command {
     let full_command = args.join(" ");
     match full_command.as_str() {
         c if c.contains("--debug") => Command::ToggleDebug,
-        c if c.contains("--encode") => Command::ToggleEncode,
         c if c.contains("disconnect") => Command::Ignore,
         c if c.contains("connect") => Command::Connect,
         c if c.contains("getprop ro.build.version.release") => Command::GetPropRelease,
@@ -106,9 +104,6 @@ fn execute_command(command: Command) {
         }
         Command::ToggleDebug => {
             toggle_debug();
-        }
-        Command::ToggleEncode => {
-            toggle_encode();
         }
         Command::Connect => {
             println!("connected to Google Play Games");

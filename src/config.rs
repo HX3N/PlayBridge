@@ -62,6 +62,10 @@ pub fn check_benchmark_mode() -> bool {
     false
 }
 
+pub fn peek_benchmark_mode() -> bool {
+    get_registry_dword("BENCHMARK_COUNT", REG_PATH_STATE).unwrap_or(0) > 0
+}
+
 #[derive(Clone, Copy, PartialEq, Default)]
 pub enum Region {
     #[default]
@@ -130,17 +134,12 @@ pub fn set_region(region: Region) {
 
 pub struct Config {
     pub debug_capture: bool,
-    pub force_encode: bool,
     pub region: Region,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
-            debug_capture: get_reg_value("DEBUG_CAPTURE", 0u32) != 0,
-            force_encode: get_reg_value("FORCE_ENCODE", 0u32) != 0,
-            region: Region::from_str(&get_reg_value("REGION", String::new())),
-        }
+        Self { debug_capture: get_reg_value("DEBUG_CAPTURE", 0u32) != 0, region: Region::from_str(&get_reg_value("REGION", String::new())) }
     }
 }
 
@@ -241,8 +240,4 @@ fn toggle_config(key_name: &str) {
 
 pub fn toggle_debug() {
     toggle_config("DEBUG_CAPTURE");
-}
-
-pub fn toggle_encode() {
-    toggle_config("FORCE_ENCODE");
 }
