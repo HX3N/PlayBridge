@@ -1,11 +1,9 @@
-> [!NOTE]
-> For general use cases, it is recommended to use the **original [PlayBridge](https://github.com/ACK72/PlayBridge)**<br>This repository is a customized fork
-
 > [!IMPORTANT]
->
-> ### To check for any issues, use the **`Peep`** feature in MAA's Toolbox tab
->
-> The Google Play Games screen must be in `16:9 aspect ratio`
+> This is a customized fork of the original [PlayBridge](https://github.com/ACK72/PlayBridge).
+
+> [!NOTE]
+> On a `7800X3D`, RawByNc averages **50ms** per screenshot, while Encode averages **80ms**.
+> To check for any issues, use the **`Peep`** feature in MAA's Toolbox tab.
 
 ## Setup
 
@@ -22,11 +20,18 @@ Then, go to **MAA > Settings > Connection** and configure as follows:
 
 </div>
 
+## Screenshot
+
+Running the executable directly captures a screenshot of **Google Play Games** and saves it to the Desktop
+
 ## Debug Capture
 
 Run `.\PlayBridgeADB --debug` in the directory where the executable is located to toggle debug mode<br>
 You can also modify the registry value directly at `Software\PlayBridge\config\DEBUG_CAPTURE`
 
-## Screenshot
+## Force Encode
 
-Running the executable directly captures a screenshot of **Google Play Games** and saves it to the Desktop
+Run `.\PlayBridgeADB --encode` in the directory where the executable is located to toggle force encode mode<br>
+You can also modify the registry value directly at `Software\PlayBridge\config\FORCE_ENCODE`
+
+~~Why would anyone want to trigger the slower one?~~
