@@ -18,62 +18,74 @@ const MAX_WINDOW_SIZE: (u32, u32) = ((DISPLAY_WIDTH as f32 * 1.5) as u32, (DISPL
 
 const LOOPBACK_IP: &str = "127.0.0.1";
 
-pub fn send_capture() {
-    if check_benchmark_mode() {
-        // During MAA's "fastest way to screencap" test, intentionally delay to ensure RawByNc is selected
-        // If FORCE_ENCODE is set, delay RawByNc instead to force Encode selection
-        if !config().force_encode {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
+// During MAA's "fastest way to screencap" test, intentionally delay to ensure RawByNc is selected
+// If FORCE_ENCODE is set, delay RawByNc instead to force Encode selection
+fn apply_benchmark_delay(is_raw_by_nc: bool) {
+    if !check_benchmark_mode() {
+        return;
+    }
 
+    let should_delay = match (config().force_encode, is_raw_by_nc) {
+        (true, true) => true,   // FORCE_ENCODE: delay RawByNc, Encode
+        (false, false) => true, // Normal mode: delay Encode, RawByNc
+        _ => false,
+    };
+
+    if should_delay {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+fn try_capture_game_window() -> Option<DynamicImage> {
+    let hwnd = find_game_window()?;
+    restore_if_minimized(hwnd);
+    let (hwnd, log_w, log_h) = get_window_info();
+    Some(capture_window(hwnd, log_w, log_h, true))
+}
+
+pub fn send_capture() {
+    apply_benchmark_delay(false);
+
+    if check_benchmark_mode() {
         send_black_frame_png();
         return;
     }
 
-    let Some(hwnd) = find_game_window() else {
+    let Some(img) = try_capture_game_window() else {
         debug_log(LogLevel::Info, LogMode::Nested, "Window not found: Sent Black Frame (Encode)");
         send_black_frame_png();
         return;
     };
 
-    restore_if_minimized(hwnd);
-
-    let (hwnd, log_w, log_h) = get_window_info();
-
-    let img = capture_window(hwnd, log_w, log_h, true);
     img.write_with_encoder(PngEncoder::new(&mut stdout().lock())).unwrap();
 }
 
 pub fn send_capture_nc(port: u16) {
+    apply_benchmark_delay(true);
+
     if check_benchmark_mode() {
         debug_log(LogLevel::Info, LogMode::Nested, &format!("RawByNc: Connecting to {}:{}", LOOPBACK_IP, port));
-
-        // During MAA's "fastest way to screencap" test, intentionally delay to ensure RawByNc is selected
-        // If FORCE_ENCODE is set, delay RawByNc instead to force Encode selection
         if config().force_encode {
             debug_log(LogLevel::Warn, LogMode::Nested, "FORCE_ENCODE enabled: Recommended to use RawByNc");
-            std::thread::sleep(std::time::Duration::from_millis(100));
         }
-
         send_black_frame_nc(port);
         debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: Sent Black Frame (RawByNc)");
         return;
     }
 
-    let Some(hwnd) = find_game_window() else {
+    let Some(img) = try_capture_game_window() else {
         debug_log(LogLevel::Info, LogMode::Nested, "Window not found: Sent Black Frame (RawByNc)");
         send_black_frame_nc(port);
         return;
     };
 
-    restore_if_minimized(hwnd);
-    let (hwnd, log_w, log_h) = get_window_info();
+    send_raw_image_nc(img, port);
+}
 
-    // Capture & Resize
-    let img_dynamic = capture_window(hwnd, log_w, log_h, true);
-    let width = img_dynamic.width();
-    let height = img_dynamic.height();
-    let pixels = img_dynamic.to_rgba8().into_raw();
+fn send_raw_image_nc(img: DynamicImage, port: u16) {
+    let width = img.width();
+    let height = img.height();
+    let pixels = img.to_rgba8().into_raw();
 
     let mut stream = match TcpStream::connect((LOOPBACK_IP, port)) {
         Ok(s) => s,
@@ -131,11 +143,6 @@ fn send_black_frame_nc(port: u16) {
             debug_log(LogLevel::Error, LogMode::Nested, &format!("RawByNc Black Frame Socket Error: {}", e));
         }
     }
-}
-
-pub fn capture() -> DynamicImage {
-    let (hwnd, log_w, log_h) = get_window_info();
-    capture_window(hwnd, log_w, log_h, false)
 }
 
 fn capture_window(hwnd: windows::Win32::Foundation::HWND, log_w: i32, log_h: i32, validate_size: bool) -> DynamicImage {
@@ -199,12 +206,11 @@ fn validate_window_size(log_w: i32, log_h: i32, phys_w: u32, phys_h: u32) {
 }
 
 pub fn screenshot() {
-    if find_game_window().is_none() {
+    let Some(img) = try_capture_game_window() else {
         display_notification(Notification::ScreenshotFailed);
         return;
-    }
+    };
 
-    let img = capture();
     let filename = format!("Screenshot_{}.png", Local::now().format("%Y.%m.%d_%H.%M.%S.%3f"));
     let filepath = format!("{}/Desktop/{}", env::var("USERPROFILE").unwrap(), filename);
     img.write_with_encoder(PngEncoder::new(File::create(&filepath).unwrap())).unwrap();
@@ -217,27 +223,21 @@ pub fn debug_capture(x: i32, y: i32, end_point: Option<(i32, i32)>) {
         return;
     }
 
-    let img = capture();
+    let Some(img) = try_capture_game_window() else {
+        return;
+    };
     let mut img_rgb = img.to_rgb8();
 
-    match end_point {
-        Some((x2, y2)) => {
-            // start to end line
-            draw_line_segment_mut(&mut img_rgb, (x as f32, y as f32), (x2 as f32, y2 as f32), Rgb([0, 255, 0]));
+    let draw_point = |img: &mut _, (x, y), color| {
+        draw_filled_circle_mut(img, (x, y), 6, Rgb([255, 255, 255]));
+        draw_filled_circle_mut(img, (x, y), 5, color);
+    };
 
-            // swipe start point
-            draw_filled_circle_mut(&mut img_rgb, (x, y), 6, Rgb([255, 255, 255]));
-            draw_filled_circle_mut(&mut img_rgb, (x, y), 5, Rgb([255, 0, 0]));
+    draw_point(&mut img_rgb, (x, y), Rgb([255, 0, 0]));
 
-            // swipe end point
-            draw_filled_circle_mut(&mut img_rgb, (x2, y2), 6, Rgb([255, 255, 255]));
-            draw_filled_circle_mut(&mut img_rgb, (x2, y2), 5, Rgb([0, 0, 255]));
-        }
-        None => {
-            // tap point
-            draw_filled_circle_mut(&mut img_rgb, (x, y), 6, Rgb([255, 255, 255]));
-            draw_filled_circle_mut(&mut img_rgb, (x, y), 5, Rgb([255, 0, 0]));
-        }
+    if let Some((x2, y2)) = end_point {
+        draw_line_segment_mut(&mut img_rgb, (x as f32, y as f32), (x2 as f32, y2 as f32), Rgb([0, 255, 0]));
+        draw_point(&mut img_rgb, (x2, y2), Rgb([0, 0, 255]));
     }
 
     let filename = format!("Debug_{}.png", Local::now().format("%Y.%m.%d_%H.%M.%S.%3f"));
