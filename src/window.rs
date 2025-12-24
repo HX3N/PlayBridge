@@ -17,7 +17,7 @@ const CROSVM_CLASS: &str = "CROSVM_1";
 
 const LOADING_TITLE: &str = "Google Play Games";
 const LOADING_CLASS: &str = "HwndWrapper";
-const LOADING_TIMEOUT: u64 = 3;
+const LOADING_TIMEOUT: u64 = 2;
 
 const CACHE_PATH: &str = "Google/Play Games/image_cache";
 const WINDOW_RESTORE_DELAY_MS: u64 = 300;
