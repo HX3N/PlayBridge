@@ -3,7 +3,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::config::{config, get_registry_dword, set_registry_dword, Region, REG_PATH_COOLDOWN, REG_PATH_STATE};
+use crate::config::{config, get_registry_dword, set_registry_dword, Client, REG_PATH_COOLDOWN, REG_PATH_STATE};
 use crate::logging::{debug_log, LogLevel, LogMode};
 use winrt_toast::{content::text::TextPlacement, register, Scenario, Toast, ToastManager};
 
@@ -51,8 +51,8 @@ impl Notification {
     }
 
     fn body(&self) -> String {
-        match config().region {
-            Region::KR => self.body_kr(),
+        match config().client {
+            Client::KR => self.body_kr(),
             _ => self.body_en(),
         }
     }
@@ -104,8 +104,8 @@ impl Notification {
     }
 
     fn title(&self) -> String {
-        let base = match config().region {
-            Region::KR => self.title_kr(),
+        let base = match config().client {
+            Client::KR => self.title_kr(),
             _ => self.title_en(),
         };
 

@@ -67,7 +67,7 @@ pub fn peek_benchmark_mode() -> bool {
 }
 
 #[derive(Clone, Copy, PartialEq, Default)]
-pub enum Region {
+pub enum Client {
     #[default]
     Empty,
     EN,
@@ -75,71 +75,71 @@ pub enum Region {
     JP,
 }
 
-impl Region {
+impl Client {
     pub fn from_str(s: &str) -> Self {
         match s {
-            "YoStarKR" => Region::KR,
-            "YoStarJP" => Region::JP,
-            "YoStarEN" => Region::EN,
-            _ => Region::Empty,
+            "YoStarKR" => Client::KR,
+            "YoStarJP" => Client::JP,
+            "YoStarEN" => Client::EN,
+            _ => Client::Empty,
         }
     }
 
     pub fn as_str(&self) -> &'static str {
         match self {
-            Region::KR => "YoStarKR",
-            Region::JP => "YoStarJP",
-            Region::EN => "YoStarEN",
-            Region::Empty => "",
+            Client::KR => "YoStarKR",
+            Client::JP => "YoStarJP",
+            Client::EN => "YoStarEN",
+            Client::Empty => "",
         }
     }
 
     pub fn title(&self) -> &'static str {
         match self {
-            Region::KR => "명일방주",
-            Region::JP => "アークナイツ",
-            Region::EN => "Arknights",
-            Region::Empty => "",
+            Client::KR => "명일방주",
+            Client::JP => "アークナイツ",
+            Client::EN => "Arknights",
+            Client::Empty => "",
         }
     }
 
     pub fn package(&self) -> &'static str {
         match self {
-            Region::KR => "com.YoStarKR.Arknights",
-            Region::JP => "com.YoStarJP.Arknights",
-            Region::EN => "com.YoStar.Arknights",
-            Region::Empty => "",
+            Client::KR => "com.YoStarKR.Arknights",
+            Client::JP => "com.YoStarJP.Arknights",
+            Client::EN => "com.YoStarEN.Arknights",
+            Client::Empty => "",
         }
     }
 }
 
-pub fn set_region(region: Region) {
-    let is_region_same = {
+pub fn set_client(client: Client) {
+    let is_client_same = {
         let current_config = config();
-        current_config.region == region
+        current_config.client == client
     };
 
-    if is_region_same {
+    if is_client_same {
         return;
     }
 
     debug_log(
         LogLevel::Info,
         LogMode::Nested,
-        &format!("REGION set: {} (title: {}, package: {})", region.as_str(), region.title(), region.package()),
+        &format!("CLIENT set: {} (title: {}, package: {})", client.as_str(), client.title(), client.package()),
     );
-    set_registry_value("REGION", region.as_str()).unwrap();
+    set_registry_value("CLIENT", client.as_str()).unwrap();
     Config::reload();
 }
 
 pub struct Config {
     pub debug_capture: bool,
-    pub region: Region,
+    pub client: Client,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { debug_capture: get_reg_value("DEBUG_CAPTURE", 0u32) != 0, region: Region::from_str(&get_reg_value("REGION", String::new())) }
+        Self { debug_capture: get_reg_value("DEBUG_CAPTURE", 0u32) != 0, client: Client::from_str(&get_reg_value("CLIENT", String::new())) }
     }
 }
 

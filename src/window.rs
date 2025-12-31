@@ -2,7 +2,7 @@ use std::{ffi::c_void, thread, time::Duration};
 
 use regex::Regex;
 
-use crate::config::{config, set_region, Region};
+use crate::config::{config, set_client, Client};
 use crate::logging::{debug_log, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification};
 
@@ -28,11 +28,11 @@ pub fn launch_arknights(intent: &str) {
 }
 
 pub fn ensure_game_ready() {
-    if config().region == Region::Empty {
+    if config().client == Client::Empty {
         debug_log(LogLevel::Info, LogMode::Nested, "Try detecting package from AppData/Local/Google/Play Games");
         if let Some(package) = find_installed_package() {
-            if let Some(region) = resolve_region(&package) {
-                set_region(region);
+            if let Some(client) = resolve_client(&package) {
+                set_client(client);
             }
         } else {
             debug_log(LogLevel::Warn, LogMode::Nested, "Package detection failed");
@@ -47,7 +47,7 @@ fn start_game_if_needed() {
         return;
     }
 
-    let package = config().region.package().to_string();
+    let package = config().client.package().to_string();
 
     if !is_loading_screen_active() {
         let _ = open::that(format!("googleplaygames://launch/?id={}", package));
@@ -87,19 +87,19 @@ fn apply_intent_package(intent: &str) {
     // Ex: com.YoStar__.Arknights/com.u8.sdk.U8UnityContext
     let package = intent.split('/').next().unwrap_or(intent);
 
-    if config().region.package() == package {
+    if config().client.package() == package {
         return;
     }
 
-    if let Some(region) = resolve_region(package) {
-        set_region(region);
+    if let Some(client) = resolve_client(package) {
+        set_client(client);
     }
 }
 
-fn resolve_region(package: &str) -> Option<Region> {
-    for region in [Region::KR, Region::JP, Region::EN] {
-        if package.starts_with(region.package()) {
-            return Some(region);
+fn resolve_client(package: &str) -> Option<Client> {
+    for client in [Client::KR, Client::JP, Client::EN] {
+        if package.starts_with(client.package()) {
+            return Some(client);
         }
     }
     None
@@ -107,7 +107,7 @@ fn resolve_region(package: &str) -> Option<Region> {
 
 pub fn find_game_window() -> Option<HWND> {
     let windows = window_list().ok()?;
-    let current_title = config().region.title();
+    let current_title = config().client.title();
 
     if !current_title.is_empty() {
         if let Some(hwnd) = match_window_by_title(&windows, current_title) {
@@ -115,10 +115,10 @@ pub fn find_game_window() -> Option<HWND> {
         }
     }
 
-    for region in [Region::KR, Region::JP, Region::EN] {
-        if region.title() != current_title {
-            if let Some(hwnd) = match_window_by_title(&windows, region.title()) {
-                set_region(region);
+    for client in [Client::KR, Client::JP, Client::EN] {
+        if client.title() != current_title {
+            if let Some(hwnd) = match_window_by_title(&windows, client.title()) {
+                set_client(client);
                 return Some(hwnd);
             }
         }
