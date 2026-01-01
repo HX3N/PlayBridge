@@ -3,7 +3,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::config::{config, get_registry_dword, set_registry_dword, Client, REG_PATH_COOLDOWN, REG_PATH_STATE};
+use crate::config::*;
 use crate::logging::{debug_log, LogLevel, LogMode};
 use winrt_toast::{content::text::TextPlacement, register, Scenario, Toast, ToastManager};
 
@@ -33,14 +33,24 @@ pub enum Notification {
     UnknownCommand(String),
     Panic(String),
     UpdateAvailable(String),
+    UnsupportedClient(String),
+    ClientMismatch(String, String),
 }
 
 impl Notification {
     fn level(&self) -> LogLevel {
         match self {
             Self::Screenshot | Self::GpgShutdown | Self::WindowChanged(..) => LogLevel::Info,
-            Self::WindowMinimized | Self::WindowTooSmall(..) | Self::WindowTooLarge(..) | Self::WindowWrongRatio(..) => LogLevel::Warn,
+
+            Self::WindowMinimized
+            | Self::WindowTooSmall(..)
+            | Self::WindowTooLarge(..)
+            | Self::WindowWrongRatio(..)
+            | Self::UnsupportedClient(..)
+            | Self::ClientMismatch(..) => LogLevel::Warn,
+
             Self::ScreenshotFailed | Self::UnknownCommand(..) | Self::Panic(..) => LogLevel::Error,
+
             Self::UpdateAvailable(..) => LogLevel::Update,
         }
     }
@@ -73,6 +83,12 @@ impl Notification {
             Self::Panic(msg) => format!("Fatal error\n{}", msg),
 
             Self::UpdateAvailable(v) => format!("New version found ({})\nDownload from GitHub Releases", v),
+            Self::UnsupportedClient(r) => {
+                format!("Requested client is not supported\nPlease check 'Client' in MAA 'Game Settings'\nRequested: {}", r)
+            }
+            Self::ClientMismatch(r, i) => {
+                format!("Requested client does not match installed client\nPlease check 'Client' in MAA 'Game Settings'\nRequested: {}\nInstalled: {}", r, i)
+            }
         }
     }
 
@@ -92,6 +108,12 @@ impl Notification {
             Self::Panic(msg) => format!("치명적인 오류 발생\n{}", msg),
 
             Self::UpdateAvailable(v) => format!("신규 버전을 발견했어요 ({})\nGitHub Releases에서 다운로드해주세요", v),
+            Self::UnsupportedClient(r) => {
+                format!("요청된 클라이언트는 지원하지 않아요\nMAA '실행 설정'에서 '클라이언트'를 확인해주세요\n요청됨: {}", r)
+            }
+            Self::ClientMismatch(r, i) => {
+                format!("요청된 클라이언트와 설치된 클라이언트가 달라요\nMAA '실행 설정'에서 '클라이언트'를 확인해주세요\n요청됨: {}\n설치됨: {}", r, i)
+            }
         }
     }
 
@@ -104,15 +126,9 @@ impl Notification {
     }
 
     fn title(&self) -> String {
-        let base = match config().client {
+        match config().client {
             Client::KR => self.title_kr(),
             _ => self.title_en(),
-        };
-
-        if config().debug_capture {
-            format!("{} 🛠️", base)
-        } else {
-            base
         }
     }
 

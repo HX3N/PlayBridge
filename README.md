@@ -1,9 +1,10 @@
-> [!NOTE]
-> On a `7800X3D`, RawByNc averages **50ms** per screenshot, while Encode averages **80ms**.<br>
-> To check for any issues, use the **`Peep`** feature in MAA's Toolbox tab.
-
 > [!IMPORTANT]
 > This is a customized fork of the original [PlayBridge](https://github.com/ACK72/PlayBridge).
+
+> [!NOTE]
+> On a `7800X3D`, RawByNc averages **50ms** per screenshot, while Encode averages **80ms**.<br>
+> To check for any issues, use the **`Peep`** feature in MAA's Toolbox tab.<br>
+> Recommended to enable `Login` feature on the first launch.
 
 ## Setup
 

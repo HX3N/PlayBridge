@@ -1,7 +1,5 @@
 use std::{ffi::c_void, thread, time::Duration};
 
-use regex::Regex;
-
 use crate::config::{config, set_client, Client};
 use crate::logging::{debug_log, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification};
@@ -13,10 +11,10 @@ use windows::Win32::{
     UI::WindowsAndMessaging::{FindWindowExW, GetClassNameW, GetClientRect, GetParent, IsIconic, ShowWindow, SW_RESTORE},
 };
 
+const WRAPPER_CLASS: &str = "HwndWrapper";
 const CROSVM_CLASS: &str = "CROSVM_1";
 
 const LOADING_TITLE: &str = "Google Play Games";
-const LOADING_CLASS: &str = "HwndWrapper";
 const LOADING_TIMEOUT_SECS: u64 = 2;
 
 const CACHE_PATH: &str = "Google/Play Games/image_cache";
@@ -75,11 +73,13 @@ fn find_installed_package() -> Option<String> {
     let cache_path = format!("{}/{}", local_app_data, CACHE_PATH);
 
     // Ex: com.YoStar__.Arknights.appicon.ico
-    let re = Regex::new(r"^com\.YoStar.+\.Arknights").unwrap();
-
     std::fs::read_dir(&cache_path).ok()?.flatten().find_map(|e| {
         let name = e.file_name().to_string_lossy().to_string();
-        re.find(&name).map(|m| m.as_str().to_string())
+        if name.starts_with("com.") && name.contains(".Arknights") {
+            Some(name)
+        } else {
+            None
+        }
     })
 }
 
@@ -92,7 +92,14 @@ fn apply_intent_package(intent: &str) {
     }
 
     if let Some(client) = resolve_client(package) {
+        let current_client = config().client;
+        if current_client != Client::Empty && current_client != client {
+            display_notification(Notification::ClientMismatch(client.package().to_string(), current_client.package().to_string()));
+            return;
+        }
         set_client(client);
+    } else {
+        display_notification(Notification::UnsupportedClient(package.to_string()));
     }
 }
 
@@ -128,10 +135,7 @@ pub fn find_game_window() -> Option<HWND> {
 }
 
 fn match_window_by_title(windows: &[HwndName], title: &str) -> Option<HWND> {
-    let pattern = format!("^{}( - .+)?$", title);
-    let re = Regex::new(&pattern).ok()?;
-
-    windows.iter().filter(|w| re.is_match(&w.window_name)).find_map(|win| {
+    windows.iter().filter(|w| w.window_name.starts_with(title)).find_map(|win| {
         let hwnd = HWND(win.hwnd as usize as *mut c_void);
         let class_name = get_window_class(hwnd)?;
 
@@ -140,7 +144,7 @@ fn match_window_by_title(windows: &[HwndName], title: &str) -> Option<HWND> {
         // New: HwndWrapper > CROSVM_1 > subWin
         if class_name == CROSVM_CLASS {
             Some(hwnd)
-        } else if class_name.starts_with(LOADING_CLASS) {
+        } else if class_name.starts_with(WRAPPER_CLASS) {
             find_crosvm_child(hwnd)
         } else {
             None
@@ -163,7 +167,7 @@ fn is_loading_screen_active() -> bool {
         if i.window_name == LOADING_TITLE {
             let hwnd = HWND(i.hwnd as usize as *mut c_void);
             if let Some(class_name) = get_window_class(hwnd) {
-                return class_name.starts_with(LOADING_CLASS);
+                return class_name.starts_with(WRAPPER_CLASS);
             }
         }
         false

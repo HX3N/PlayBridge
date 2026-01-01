@@ -8,8 +8,7 @@ use std::{
 };
 
 use chrono::Local;
-use image::{codecs::png::PngEncoder, DynamicImage, ImageBuffer, Rgb, Rgba, RgbaImage};
-use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut};
+use image::{codecs::png::PngEncoder, DynamicImage, ImageBuffer, Rgba, RgbaImage};
 
 use crate::config::*;
 use crate::logging::{debug_log, get_debug_folder, LogLevel, LogMode};
@@ -121,27 +120,28 @@ pub fn debug_capture(x: i32, y: i32, end_point: Option<(i32, i32)>) {
     let Some(img) = capture_window_png() else {
         return;
     };
-    let mut img_rgb = img.to_rgb8();
+    let mut img = img.to_rgba8();
 
-    let draw_point = |img: &mut _, (x, y), color| {
-        draw_filled_circle_mut(img, (x, y), 6, Rgb([255, 255, 255]));
-        draw_filled_circle_mut(img, (x, y), 5, color);
+    let draw_point = |img: &mut RgbaImage, (x, y), color| {
+        draw_filled_circle(img, x, y, 6, Rgba([255, 255, 255, 255]));
+        draw_filled_circle(img, x, y, 5, color);
     };
 
-    draw_point(&mut img_rgb, (x, y), Rgb([255, 0, 0]));
+    draw_point(&mut img, (x, y), Rgba([255, 0, 0, 255]));
 
     if let Some((x2, y2)) = end_point {
-        draw_line_segment_mut(&mut img_rgb, (x as f32, y as f32), (x2 as f32, y2 as f32), Rgb([0, 255, 0]));
-        draw_point(&mut img_rgb, (x2, y2), Rgb([0, 0, 255]));
+        draw_line(&mut img, x, y, x2, y2, Rgba([0, 255, 0, 255]));
+        draw_point(&mut img, (x2, y2), Rgba([0, 0, 255, 255]));
     }
 
     let filename = format!("Debug_{}.png", Local::now().format("%Y.%m.%d_%H.%M.%S.%3f"));
     let capture_folder = get_debug_folder().join("PlayBridge");
     let _ = std::fs::create_dir_all(&capture_folder);
+    cleanup_old_captures(&capture_folder);
+
     let filepath = capture_folder.join(&filename);
 
-    let dynamic_img = DynamicImage::ImageRgb8(img_rgb);
-    dynamic_img.write_with_encoder(PngEncoder::new(File::create(&filepath).unwrap())).unwrap();
+    img.write_with_encoder(PngEncoder::new(File::create(&filepath).unwrap())).unwrap();
 
     debug_log(LogLevel::Info, LogMode::Nested, &format!("Debug capture: {}", filepath.display()));
 }
@@ -208,5 +208,85 @@ fn validate_window_size(log_w: i32, log_h: i32, phys_w: u32, phys_h: u32) {
         );
 
         display_notification(Notification::WindowChanged(phys_w, phys_h));
+    }
+}
+
+fn draw_filled_circle(img: &mut RgbaImage, cx: i32, cy: i32, radius: i32, color: Rgba<u8>) {
+    let (w, h) = (img.width() as i32, img.height() as i32);
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            if dx * dx + dy * dy <= radius * radius {
+                let nx = cx + dx;
+                let ny = cy + dy;
+                if nx >= 0 && nx < w && ny >= 0 && ny < h {
+                    img.put_pixel(nx as u32, ny as u32, color);
+                }
+            }
+        }
+    }
+}
+
+fn draw_line(img: &mut RgbaImage, x0: i32, y0: i32, x1: i32, y1: i32, color: Rgba<u8>) {
+    let (w, h) = (img.width() as i32, img.height() as i32);
+    let mut x = x0;
+    let mut y = y0;
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+
+    loop {
+        if x >= 0 && x < w && y >= 0 && y < h {
+            img.put_pixel(x as u32, y as u32, color);
+        }
+        if x == x1 && y == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            if x == x1 {
+                break;
+            }
+            err += dy;
+            x += sx;
+        }
+        if e2 <= dx {
+            if y == y1 {
+                break;
+            }
+            err += dx;
+            y += sy;
+        }
+    }
+}
+
+fn cleanup_old_captures(folder: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return;
+    };
+
+    let mut files: Vec<_> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            name.starts_with("Debug_") && name.ends_with(".png")
+        })
+        .collect();
+
+    if files.len() < MAX_DEBUG_CAPTURE_FILES {
+        return;
+    }
+
+    files.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH));
+
+    let num_to_remove = files.len().saturating_sub(MAX_DEBUG_CAPTURE_FILES - 1);
+
+    if num_to_remove == 0 {
+        return;
+    }
+
+    for entry in files.iter().take(num_to_remove) {
+        std::fs::remove_file(entry.path()).ok();
     }
 }
