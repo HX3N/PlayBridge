@@ -22,7 +22,10 @@ fn main() {
 
     let raw_args: Vec<String> = env::args().collect();
     let full_joined = raw_args.join(" ");
-    let args: Vec<String> = full_joined.split_whitespace().map(|s| s.to_string()).collect();
+    let mut args: Vec<String> = vec![raw_args[0].clone()];
+    if raw_args.len() > 1 {
+        args.extend(raw_args[1..].join(" ").split_whitespace().map(|s| s.to_string()));
+    }
 
     debug_log(LogLevel::Info, LogMode::Start, &full_joined);
 
