@@ -8,23 +8,20 @@ use std::{
 };
 
 use chrono::Local;
+use fast_image_resize::{images::Image, PixelType, ResizeAlg, ResizeOptions, Resizer};
 use image::{codecs::png::PngEncoder, DynamicImage, ImageBuffer, Rgba, RgbaImage};
+use win_screenshot::prelude::{capture_window_ex, Area, Using};
+use windows::Win32::UI::HiDpi::{GetWindowDpiAwarenessContext, SetThreadDpiAwarenessContext};
 
 use crate::config::*;
 use crate::logging::{debug_log, get_debug_folder, LogLevel, LogMode};
 use crate::notification::{display_notification, get_value, set_value, Notification};
 use crate::window::{find_game_window, get_window_info, restore_if_minimized};
 
-use win_screenshot::prelude::{capture_window_ex, Area, Using};
-use windows::Win32::UI::HiDpi::{GetWindowDpiAwarenessContext, SetThreadDpiAwarenessContext};
-
-use fast_image_resize::{images::Image, PixelType, ResizeAlg, ResizeOptions, Resizer};
-
-const MAX_WINDOW_SIZE: (u32, u32) = ((DISPLAY_WIDTH as f32 * 1.5) as u32, (DISPLAY_HEIGHT as f32 * 1.5) as u32);
-
 const LOOPBACK_IP: &str = "127.0.0.1";
-const BENCHMARK_DELAY_MS: u64 = 50;
 const TCP_TIMEOUT_MS: u64 = 100;
+const BENCHMARK_DELAY_MS: u64 = 50;
+const MAX_WINDOW_SIZE: (u32, u32) = ((DISPLAY_WIDTH as f32 * 1.5) as u32, (DISPLAY_HEIGHT as f32 * 1.5) as u32);
 
 pub fn send_capture() {
     let img = if check_benchmark_mode() {
@@ -62,41 +59,7 @@ pub fn send_capture_nc(port: u16) {
         }
     };
 
-    let mut stream = match TcpStream::connect((LOOPBACK_IP, port)) {
-        Ok(s) => s,
-        Err(e) => {
-            debug_log(LogLevel::Error, LogMode::Nested, &format!("Socket Connect Failed: {}", e));
-            return;
-        }
-    };
-
-    // Protocol: [Width:4][Height:4][Format:4][RGBA Data] / Format=1 (RGBA_8888)
-    let mut buffer = Vec::with_capacity(12 + pixels.len());
-    buffer.extend_from_slice(&DISPLAY_WIDTH.to_le_bytes());
-    buffer.extend_from_slice(&DISPLAY_HEIGHT.to_le_bytes());
-    buffer.extend_from_slice(&1u32.to_le_bytes());
-    buffer.extend_from_slice(&pixels);
-
-    // Ensure last alpha byte is 0xFF for MAA validation
-    if let Some(last) = buffer.last_mut() {
-        *last = 0xFF;
-    }
-
-    if let Err(e) = stream.write_all(&buffer) {
-        debug_log(LogLevel::Error, LogMode::Nested, &format!("Socket Send Failed: {}", e));
-        return;
-    }
-
-    // Send FIN and wait for MAA to close the connection before process exit
-    if let Err(e) = stream.shutdown(Shutdown::Write) {
-        debug_log(LogLevel::Warn, LogMode::Nested, &format!("Socket Shutdown Failed: {}", e));
-    }
-
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(TCP_TIMEOUT_MS)));
-    let mut dump = [0; 1];
-    if let Err(e) = stream.read(&mut dump) {
-        debug_log(LogLevel::Warn, LogMode::Nested, &format!("Socket Wait Failed: {}", e));
-    }
+    transmit_pixels_nc(pixels, port);
 }
 
 pub fn screenshot() {
@@ -171,11 +134,6 @@ fn capture_resized_pixels() -> Option<Vec<u8>> {
     Some(dst_image.into_vec())
 }
 
-fn capture_window_png() -> Option<DynamicImage> {
-    let pixels = capture_resized_pixels()?;
-    Some(DynamicImage::ImageRgba8(RgbaImage::from_raw(DISPLAY_WIDTH, DISPLAY_HEIGHT, pixels).unwrap()))
-}
-
 fn validate_window_size(log_w: i32, log_h: i32, phys_w: u32, phys_h: u32) {
     let height_ratio = log_h as f32 / (log_w as f32 / 16.0);
 
@@ -208,6 +166,49 @@ fn validate_window_size(log_w: i32, log_h: i32, phys_w: u32, phys_h: u32) {
         );
 
         display_notification(Notification::WindowChanged(phys_w, phys_h));
+    }
+}
+
+fn capture_window_png() -> Option<DynamicImage> {
+    let pixels = capture_resized_pixels()?;
+    Some(DynamicImage::ImageRgba8(RgbaImage::from_raw(DISPLAY_WIDTH, DISPLAY_HEIGHT, pixels).unwrap()))
+}
+
+fn transmit_pixels_nc(pixels: Vec<u8>, port: u16) {
+    let mut stream = match TcpStream::connect((LOOPBACK_IP, port)) {
+        Ok(s) => s,
+        Err(e) => {
+            debug_log(LogLevel::Error, LogMode::Nested, &format!("Socket Connect Failed: {}", e));
+            return;
+        }
+    };
+
+    // Protocol: [Width:4][Height:4][Format:4][RGBA Data] / Format=1 (RGBA_8888)
+    let mut buffer = Vec::with_capacity(12 + pixels.len());
+    buffer.extend_from_slice(&DISPLAY_WIDTH.to_le_bytes());
+    buffer.extend_from_slice(&DISPLAY_HEIGHT.to_le_bytes());
+    buffer.extend_from_slice(&1u32.to_le_bytes());
+    buffer.extend_from_slice(&pixels);
+
+    // Ensure last alpha byte is 0xFF for MAA validation
+    if let Some(last) = buffer.last_mut() {
+        *last = 0xFF;
+    }
+
+    if let Err(e) = stream.write_all(&buffer) {
+        debug_log(LogLevel::Error, LogMode::Nested, &format!("Socket Send Failed: {}", e));
+        return;
+    }
+
+    // Send FIN and wait for MAA to close the connection before process exit
+    if let Err(e) = stream.shutdown(Shutdown::Write) {
+        debug_log(LogLevel::Warn, LogMode::Nested, &format!("Socket Shutdown Failed: {}", e));
+    }
+
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(TCP_TIMEOUT_MS)));
+    let mut dump = [0; 1];
+    if let Err(e) = stream.read(&mut dump) {
+        debug_log(LogLevel::Warn, LogMode::Nested, &format!("Socket Wait Failed: {}", e));
     }
 }
 

@@ -1,11 +1,11 @@
+use std::{env, time::Instant};
+
 mod capture;
 mod config;
 mod input;
 mod logging;
 mod notification;
 mod window;
-
-use std::{env, time::Instant};
 
 use crate::capture::{screenshot, send_capture, send_capture_nc};
 use crate::config::{check_for_update, check_version, toggle_debug, DISPLAY_HEIGHT, DISPLAY_WIDTH};

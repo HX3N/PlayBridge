@@ -15,15 +15,10 @@ const WRAPPER_CLASS: &str = "HwndWrapper";
 const CROSVM_CLASS: &str = "CROSVM_1";
 
 const LOADING_TITLE: &str = "Google Play Games";
-const LOADING_TIMEOUT_SECS: u64 = 2;
 
 const CACHE_PATH: &str = "Google/Play Games/image_cache";
 const WINDOW_RESTORE_DELAY_MS: u64 = 300;
-
-pub fn launch_arknights(intent: &str) {
-    apply_intent_package(intent);
-    start_game_if_needed();
-}
+const LOADING_TIMEOUT_SECS: u64 = 2;
 
 pub fn ensure_game_ready() {
     if config().client == Client::Empty {
@@ -38,6 +33,31 @@ pub fn ensure_game_ready() {
         }
     }
     start_game_if_needed();
+}
+
+pub fn launch_arknights(intent: &str) {
+    apply_intent_package(intent);
+    start_game_if_needed();
+}
+
+fn apply_intent_package(intent: &str) {
+    // Ex: com.YoStar__.Arknights/com.u8.sdk.U8UnityContext
+    let package = intent.split('/').next().unwrap_or(intent);
+
+    if config().client.package() == package {
+        return;
+    }
+
+    if let Some(client) = resolve_client(package) {
+        let current_client = config().client;
+        if current_client != Client::Empty && current_client != client {
+            display_notification(Notification::ClientMismatch(client.package().to_string(), current_client.package().to_string()));
+            return;
+        }
+        set_client(client);
+    } else {
+        display_notification(Notification::UnsupportedClient(package.to_string()));
+    }
 }
 
 fn start_game_if_needed() {
@@ -83,54 +103,12 @@ fn find_installed_package() -> Option<String> {
     })
 }
 
-fn apply_intent_package(intent: &str) {
-    // Ex: com.YoStar__.Arknights/com.u8.sdk.U8UnityContext
-    let package = intent.split('/').next().unwrap_or(intent);
-
-    if config().client.package() == package {
-        return;
-    }
-
-    if let Some(client) = resolve_client(package) {
-        let current_client = config().client;
-        if current_client != Client::Empty && current_client != client {
-            display_notification(Notification::ClientMismatch(client.package().to_string(), current_client.package().to_string()));
-            return;
-        }
-        set_client(client);
-    } else {
-        display_notification(Notification::UnsupportedClient(package.to_string()));
-    }
-}
-
 fn resolve_client(package: &str) -> Option<Client> {
     for client in [Client::KR, Client::JP, Client::EN] {
         if package.starts_with(client.package()) {
             return Some(client);
         }
     }
-    None
-}
-
-pub fn find_game_window() -> Option<HWND> {
-    let windows = window_list().ok()?;
-    let current_title = config().client.title();
-
-    if !current_title.is_empty() {
-        if let Some(hwnd) = match_window_by_title(&windows, current_title) {
-            return Some(hwnd);
-        }
-    }
-
-    for client in [Client::KR, Client::JP, Client::EN] {
-        if client.title() != current_title {
-            if let Some(hwnd) = match_window_by_title(&windows, client.title()) {
-                set_client(client);
-                return Some(hwnd);
-            }
-        }
-    }
-
     None
 }
 
@@ -185,6 +163,28 @@ fn get_window_class(hwnd: HWND) -> Option<String> {
             None
         }
     }
+}
+
+pub fn find_game_window() -> Option<HWND> {
+    let windows = window_list().ok()?;
+    let current_title = config().client.title();
+
+    if !current_title.is_empty() {
+        if let Some(hwnd) = match_window_by_title(&windows, current_title) {
+            return Some(hwnd);
+        }
+    }
+
+    for client in [Client::KR, Client::JP, Client::EN] {
+        if client.title() != current_title {
+            if let Some(hwnd) = match_window_by_title(&windows, client.title()) {
+                set_client(client);
+                return Some(hwnd);
+            }
+        }
+    }
+
+    None
 }
 
 pub fn get_window_info() -> (HWND, i32, i32) {

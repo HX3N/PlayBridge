@@ -1,9 +1,3 @@
-use crate::{
-    capture::debug_capture,
-    config::{DISPLAY_HEIGHT, DISPLAY_WIDTH},
-    logging::{debug_log, LogLevel, LogMode},
-    window::{find_game_window, get_window_info},
-};
 use std::{
     thread,
     time::{Duration, Instant},
@@ -16,25 +10,16 @@ use windows::Win32::{
     },
 };
 
+use crate::{
+    capture::debug_capture,
+    config::{DISPLAY_HEIGHT, DISPLAY_WIDTH},
+    logging::{debug_log, LogLevel, LogMode},
+    window::{find_game_window, get_window_info},
+};
+
 const INPUT_DELAY_MS: u64 = 10;
 const TEXT_INPUT_DELAY_MS: u64 = 50;
 const SWIPE_SPEED: u32 = 10;
-
-pub fn post_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) {
-    unsafe { _ = PostMessageA(Some(hwnd), msg, wparam, lparam) };
-}
-
-fn send_cancel_mode(hwnd: HWND) {
-    let target_hwnd = unsafe { GetParent(hwnd).ok().filter(|parent| !parent.0.is_null()).unwrap_or(hwnd) };
-
-    post_message(target_hwnd, WM_CANCELMODE, WPARAM(0), LPARAM(0));
-}
-
-fn get_relative_point(x: i32, y: i32, w: i32, h: i32) -> isize {
-    let nx = (x as f32 / DISPLAY_WIDTH as f32 * w as f32).round() as isize;
-    let ny = (y as f32 / DISPLAY_HEIGHT as f32 * h as f32).round() as isize;
-    ny << 16 | nx
-}
 
 pub fn input_tap(x: i32, y: i32) {
     debug_capture(x, y, None);
@@ -58,14 +43,6 @@ pub fn input_text(text: &str) {
     for ch in text.chars() {
         post_message(hwnd, WM_CHAR, WPARAM(ch as usize), LPARAM(0));
         thread::sleep(Duration::from_millis(TEXT_INPUT_DELAY_MS));
-    }
-}
-
-fn ease_in_out(t: f32) -> f32 {
-    if t < 0.5 {
-        4.0 * t * t * t
-    } else {
-        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
     }
 }
 
@@ -130,4 +107,27 @@ pub fn terminate() {
         return;
     };
     post_message(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+}
+
+pub fn post_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) {
+    unsafe { _ = PostMessageA(Some(hwnd), msg, wparam, lparam) };
+}
+
+fn send_cancel_mode(hwnd: HWND) {
+    let target_hwnd = unsafe { GetParent(hwnd).ok().filter(|parent| !parent.0.is_null()).unwrap_or(hwnd) };
+    post_message(target_hwnd, WM_CANCELMODE, WPARAM(0), LPARAM(0));
+}
+
+fn get_relative_point(x: i32, y: i32, w: i32, h: i32) -> isize {
+    let nx = (x as f32 / DISPLAY_WIDTH as f32 * w as f32).round() as isize;
+    let ny = (y as f32 / DISPLAY_HEIGHT as f32 * h as f32).round() as isize;
+    ny << 16 | nx
+}
+
+fn ease_in_out(t: f32) -> f32 {
+    if t < 0.5 {
+        4.0 * t * t * t
+    } else {
+        1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+    }
 }
