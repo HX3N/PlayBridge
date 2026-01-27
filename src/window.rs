@@ -1,15 +1,19 @@
 use std::{ffi::c_void, thread, time::Duration};
 
-use crate::config::{config, set_client, Client};
-use crate::logging::{debug_log, LogLevel, LogMode};
-use crate::notification::{display_notification, Notification};
-
 use win_screenshot::prelude::*;
 use windows::core::PCWSTR;
 use windows::Win32::{
     Foundation::{HWND, RECT},
-    UI::WindowsAndMessaging::{FindWindowExW, GetClassNameW, GetClientRect, GetParent, IsIconic, ShowWindow, SW_RESTORE},
+    UI::WindowsAndMessaging::{
+        FindWindowExW, GetClassNameW, GetClientRect, GetParent, GetWindowRect, IsIconic, IsZoomed, SetWindowPos, ShowWindow,
+        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_RESTORE,
+    },
 };
+
+use crate::config::{config, set_client, Client};
+use crate::input::send_cancel_mode;
+use crate::logging::{debug_log, LogLevel, LogMode};
+use crate::notification::{display_notification, Notification, ResizeReason};
 
 const WRAPPER_CLASS: &str = "HwndWrapper";
 const CROSVM_CLASS: &str = "CROSVM_1";
@@ -18,7 +22,91 @@ const LOADING_TITLE: &str = "Google Play Games";
 
 const CACHE_PATH: &str = "Google/Play Games/image_cache";
 const WINDOW_RESTORE_DELAY_MS: u64 = 300;
-const LOADING_TIMEOUT_SECS: u64 = 2;
+
+pub struct GameWindow {
+    pub hwnd: HWND,
+}
+
+impl GameWindow {
+    pub fn find() -> Option<Self> {
+        let windows = window_list().ok()?;
+        let current_title = config().client.title();
+
+        if !current_title.is_empty() {
+            if let Some(hwnd) = match_window_by_title(&windows, current_title) {
+                return Some(Self { hwnd });
+            }
+        }
+
+        for client in [Client::KR, Client::JP, Client::EN] {
+            if client.title() != current_title {
+                if let Some(hwnd) = match_window_by_title(&windows, client.title()) {
+                    set_client(client);
+                    return Some(Self { hwnd });
+                }
+            }
+        }
+
+        None
+    }
+
+    pub fn restore(&self) {
+        let target_hwnd = unsafe { GetParent(self.hwnd).ok().filter(|parent| !parent.0.is_null()).unwrap_or(self.hwnd) };
+
+        if unsafe { IsIconic(target_hwnd).as_bool() } {
+            display_notification(Notification::WindowMinimized);
+            unsafe { _ = ShowWindow(target_hwnd, SW_RESTORE) };
+            thread::sleep(Duration::from_millis(WINDOW_RESTORE_DELAY_MS));
+        }
+    }
+
+    pub fn resize(&self, current_w: u32, current_h: u32, target_w: u32, target_h: u32) {
+        send_cancel_mode(self.hwnd);
+
+        let top_hwnd = get_top_level_parent(self.hwnd);
+
+        let mut top_rect = RECT::default();
+        unsafe { _ = GetWindowRect(top_hwnd, &mut top_rect) };
+
+        let top_w = top_rect.right - top_rect.left;
+        let top_h = top_rect.bottom - top_rect.top;
+
+        let offset_w = top_w - current_w as i32;
+        let offset_h = top_h - current_h as i32;
+
+        // Restore if maximized
+        if unsafe { IsZoomed(top_hwnd).as_bool() } {
+            debug_log(LogLevel::Info, LogMode::Nested, "resize: Window is maximized, restoring");
+            unsafe { _ = ShowWindow(top_hwnd, SW_RESTORE) };
+            display_notification(Notification::WindowMaximizedRestored);
+            return;
+        }
+
+        let target_top_w = target_w as i32 + offset_w;
+        let target_top_h = target_h as i32 + offset_h;
+
+        if top_w == target_top_w && top_h == target_top_h {
+            return;
+        }
+
+        unsafe { _ = SetWindowPos(top_hwnd, None, 0, 0, target_top_w, target_top_h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) };
+
+        debug_log(LogLevel::Info, LogMode::Nested, &format!("resize: Adjusted to {}x{}", target_w, target_h));
+
+        let reason = if target_w > current_w { ResizeReason::TooSmall } else { ResizeReason::TooLarge };
+
+        display_notification(Notification::WindowAutoResized { prev_w: current_w, prev_h: current_h, target_w, target_h, reason });
+    }
+
+    pub fn get_info(&self) -> (i32, i32) {
+        let mut rect = RECT::default();
+        if unsafe { GetClientRect(self.hwnd, &mut rect) }.is_ok() {
+            (rect.right - rect.left, rect.bottom - rect.top)
+        } else {
+            (0, 0)
+        }
+    }
+}
 
 pub fn ensure_game_ready() {
     if config().client == Client::Empty {
@@ -32,15 +120,11 @@ pub fn ensure_game_ready() {
             return;
         }
     }
+
     start_game_if_needed();
 }
 
-pub fn launch_arknights(intent: &str) {
-    apply_intent_package(intent);
-    start_game_if_needed();
-}
-
-fn apply_intent_package(intent: &str) {
+pub fn apply_intent_package(intent: &str) {
     // Ex: com.YoStar__.Arknights/com.u8.sdk.U8UnityContext
     let package = intent.split('/').next().unwrap_or(intent);
 
@@ -60,31 +144,26 @@ fn apply_intent_package(intent: &str) {
     }
 }
 
-fn start_game_if_needed() {
-    if find_game_window().is_some() {
+pub fn start_game_if_needed() {
+    if GameWindow::find().is_some() {
         return;
     }
 
-    let package = config().client.package().to_string();
-
+    let client = config().client;
     if !is_loading_screen_active() {
-        let _ = open::that(format!("googleplaygames://launch/?id={}", package));
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Launching Google Play Games: {}", package));
+        debug_log(LogLevel::Info, LogMode::Nested, &format!("Launching Google Play Games: {}", client.package()));
+        let _ = open::that(format!("googleplaygames://launch/?id={}", client.package()));
     }
 
-    for i in 1..=LOADING_TIMEOUT_SECS {
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Waiting for Arknights: {}s / {}s", i, LOADING_TIMEOUT_SECS));
-        thread::sleep(Duration::from_secs(1));
-        if find_game_window().is_some() {
-            debug_log(LogLevel::Info, LogMode::Nested, "Arknights ready");
-            return;
-        }
-    }
+    debug_log(LogLevel::Info, LogMode::Nested, "Waiting for Arknights");
+    thread::sleep(Duration::from_secs(1));
 
-    if is_loading_screen_active() {
-        debug_log(LogLevel::Info, LogMode::Nested, "Timeout: Google Play Games loading");
+    if GameWindow::find().is_some() {
+        debug_log(LogLevel::Info, LogMode::Nested, "Arknights ready");
+    } else if is_loading_screen_active() {
+        debug_log(LogLevel::Info, LogMode::Nested, "Google Play Games loading");
     } else {
-        debug_log(LogLevel::Warn, LogMode::Nested, "Timeout: Google Play Games not responding");
+        debug_log(LogLevel::Warn, LogMode::Nested, "Google Play Games not responding");
     }
 }
 
@@ -157,51 +236,22 @@ fn get_window_class(hwnd: HWND) -> Option<String> {
     unsafe {
         let len = GetClassNameW(hwnd, &mut buffer);
         if len > 0 {
-            let class_name = String::from_utf16_lossy(&buffer[..len as usize]);
-            Some(class_name)
+            Some(String::from_utf16_lossy(&buffer[..len as usize]))
         } else {
             None
         }
     }
 }
 
-pub fn find_game_window() -> Option<HWND> {
-    let windows = window_list().ok()?;
-    let current_title = config().client.title();
-
-    if !current_title.is_empty() {
-        if let Some(hwnd) = match_window_by_title(&windows, current_title) {
-            return Some(hwnd);
-        }
-    }
-
-    for client in [Client::KR, Client::JP, Client::EN] {
-        if client.title() != current_title {
-            if let Some(hwnd) = match_window_by_title(&windows, client.title()) {
-                set_client(client);
-                return Some(hwnd);
+fn get_top_level_parent(mut hwnd: HWND) -> HWND {
+    let mut last_valid_hwnd = hwnd;
+    loop {
+        match unsafe { GetParent(hwnd) } {
+            Ok(parent) if !parent.0.is_null() => {
+                hwnd = parent;
+                last_valid_hwnd = hwnd;
             }
+            _ => return last_valid_hwnd,
         }
-    }
-
-    None
-}
-
-pub fn get_window_info() -> (HWND, i32, i32) {
-    let hwnd = find_game_window().expect("Failed to find window (get_window_info)");
-    let mut rect = RECT::default();
-
-    let (w, h) = if unsafe { GetClientRect(hwnd, &mut rect) }.is_ok() { (rect.right - rect.left, rect.bottom - rect.top) } else { (0, 0) };
-
-    (hwnd, w, h)
-}
-
-pub fn restore_if_minimized(hwnd: HWND) {
-    let target_hwnd = unsafe { GetParent(hwnd).ok().filter(|parent| !parent.0.is_null()).unwrap_or(hwnd) };
-
-    if unsafe { IsIconic(target_hwnd).as_bool() } {
-        display_notification(Notification::WindowMinimized);
-        unsafe { _ = ShowWindow(target_hwnd, SW_RESTORE) };
-        thread::sleep(Duration::from_millis(WINDOW_RESTORE_DELAY_MS));
     }
 }

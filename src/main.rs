@@ -1,4 +1,4 @@
-use std::{env, time::Instant};
+use std::{env, thread, time::Duration, time::Instant};
 
 mod capture;
 mod config;
@@ -7,12 +7,13 @@ mod logging;
 mod notification;
 mod window;
 
-use crate::capture::{screenshot, send_capture, send_capture_nc};
-use crate::config::{check_for_update, check_version, toggle_debug, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use crate::config::{check_benchmark_mode, check_for_update, check_version, toggle_debug, DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use crate::config::{peek_benchmark_mode, set_benchmark_mode};
 use crate::logging::{debug_log, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification};
-use crate::window::{ensure_game_ready, launch_arknights};
+use crate::window::{apply_intent_package, ensure_game_ready, start_game_if_needed, GameWindow};
+
+const BENCHMARK_DELAY_MS: u64 = 50;
 
 fn main() {
     let start = Instant::now();
@@ -22,10 +23,7 @@ fn main() {
 
     let raw_args: Vec<String> = env::args().collect();
     let full_joined = raw_args.join(" ");
-    let mut args: Vec<String> = vec![raw_args[0].clone()];
-    if raw_args.len() > 1 {
-        args.extend(raw_args[1..].join(" ").split_whitespace().map(|s| s.to_string()));
-    }
+    let args: Vec<String> = raw_args[1..].iter().flat_map(|s| s.split_whitespace()).map(String::from).collect();
 
     debug_log(LogLevel::Info, LogMode::Start, &full_joined);
 
@@ -61,7 +59,7 @@ enum Command {
 }
 
 fn parse_command(args: &[String]) -> Command {
-    if args.len() < 2 {
+    if args.is_empty() {
         return Command::Empty;
     }
     let full_command = args.join(" ");
@@ -70,24 +68,24 @@ fn parse_command(args: &[String]) -> Command {
         c if c.contains("disconnect") => Command::Ignore,
         c if c.contains("connect") => Command::Connect,
         c if c.contains("getprop ro.build.version.release") => Command::GetPropRelease,
-        c if c.contains("am start -n") => Command::StartActivity { intent: args[7].clone() },
+        c if c.contains("am start -n") => Command::StartActivity { intent: args[6].clone() },
         c if c.contains("devices") => Command::Devices,
-        c if c.contains("input tap") => Command::Tap { x: args[6].parse().unwrap_or(0), y: args[7].parse().unwrap_or(0) },
-        c if c.contains("input text") => Command::Text { text: args[6..].join(" ") },
+        c if c.contains("input tap") => Command::Tap { x: args[5].parse().unwrap_or(0), y: args[6].parse().unwrap_or(0) },
+        c if c.contains("input text") => Command::Text { text: args[5..].join(" ") },
         c if c.contains("input swipe") => Command::Swipe {
-            x1: args[6].parse().unwrap_or(0),
-            y1: args[7].parse().unwrap_or(0),
-            x2: args[8].parse().unwrap_or(0),
-            y2: args[9].parse().unwrap_or(0),
-            duration: args[10].parse().unwrap_or(0),
+            x1: args[5].parse().unwrap_or(0),
+            y1: args[6].parse().unwrap_or(0),
+            x2: args[7].parse().unwrap_or(0),
+            y2: args[8].parse().unwrap_or(0),
+            duration: args[9].parse().unwrap_or(0),
         },
         c if c.contains("input keyevent 111") => Command::KeyEvent { keycode: 0x01 },
         c if c.contains("dumpsys window displays") || c.contains("wm size") => Command::WindowDisplays,
-        c if c.contains("exec-out screencap | nc -w 3 10.0.2.2") => Command::ScreencapNc { port: args[10].parse().unwrap_or(0) },
+        c if c.contains("exec-out screencap | nc -w 3 10.0.2.2") => Command::ScreencapNc { port: args[9].parse().unwrap_or(0) },
         c if c.contains("exec-out screencap -p") => Command::Screencap,
         c if c.contains("am force-stop") || c.contains("input keyevent HOME") => Command::ForceStop,
         c if c.contains("settings get secure android_id") => Command::GetUuid,
-        c if c.contains("shell echo") => Command::Echo { text: args[5..].join(" ") }, // Connection Preset - Compatible Mode
+        c if c.contains("shell echo") => Command::Echo { text: args[4..].join(" ") }, // Connection Preset - Compatible Mode
         c if c.contains("cat /proc/net/arp")
             || c.contains("exec-out screencap | gzip -1")
             || c.contains("start-server")
@@ -100,9 +98,15 @@ fn parse_command(args: &[String]) -> Command {
 }
 
 fn execute_command(command: Command) {
+    let window = GameWindow::find();
+
     match command {
         Command::Empty => {
-            screenshot();
+            if let Some(w) = window {
+                capture::screenshot(&w);
+            } else {
+                display_notification(Notification::ScreenshotFailed);
+            }
             check_for_update();
         }
         Command::ToggleDebug => {
@@ -115,7 +119,8 @@ fn execute_command(command: Command) {
             println!("14");
         }
         Command::StartActivity { intent } => {
-            launch_arknights(&intent);
+            apply_intent_package(&intent);
+            start_game_if_needed();
 
             println!("Starting: Intent {{ cmp={} }}", intent);
             println!("Warning: Activity not started, intent has been delivered to currently running top-most instance.");
@@ -135,25 +140,63 @@ fn execute_command(command: Command) {
             println!("0000000000000000");
         }
         Command::Tap { x, y } => {
-            input::input_tap(x, y);
+            if let Some(w) = window {
+                input::input_tap(&w, x, y);
+            } else {
+                debug_log(LogLevel::Warn, LogMode::Nested, "Tap: Window not found");
+            }
         }
         Command::Text { text } => {
-            input::input_text(&text);
+            if let Some(w) = window {
+                input::input_text(&w, &text);
+            } else {
+                debug_log(LogLevel::Warn, LogMode::Nested, "Text: Window not found");
+            }
         }
         Command::Swipe { x1, y1, x2, y2, duration } => {
-            input::input_swipe(x1, y1, x2, y2, duration);
+            if let Some(w) = window {
+                input::input_swipe(&w, x1, y1, x2, y2, duration);
+            } else {
+                debug_log(LogLevel::Warn, LogMode::Nested, "Swipe: Window not found");
+            }
         }
         Command::KeyEvent { keycode } => {
-            input::input_keyevent(keycode);
+            if let Some(w) = window {
+                input::input_keyevent(&w, keycode);
+            } else {
+                debug_log(LogLevel::Warn, LogMode::Nested, "KeyEvent: Window not found");
+            }
         }
         Command::Screencap => {
-            send_capture();
+            if check_benchmark_mode() {
+                thread::sleep(Duration::from_millis(BENCHMARK_DELAY_MS));
+                debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: Sent Black Frame (Encode)");
+                capture::send_black_frame();
+            } else if let Some(w) = window {
+                capture::send_capture(&w);
+            } else {
+                debug_log(LogLevel::Info, LogMode::Nested, "Window not found: Sent Black Frame (Encode)");
+                capture::send_black_frame();
+            }
         }
         Command::ScreencapNc { port } => {
-            send_capture_nc(port);
+            if check_benchmark_mode() {
+                debug_log(LogLevel::Info, LogMode::Nested, &format!("RawByNc: Connecting to 127.0.0.1:{}", port));
+                debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: Sent Black Frame (RawByNc)");
+                capture::send_black_frame_nc(port);
+            } else if let Some(w) = window {
+                capture::send_capture_nc(&w, port);
+            } else {
+                debug_log(LogLevel::Info, LogMode::Nested, "Window not found: Sent Black Frame (RawByNc)");
+                capture::send_black_frame_nc(port);
+            }
         }
         Command::ForceStop => {
-            input::terminate();
+            if let Some(w) = window {
+                input::terminate(&w);
+            } else {
+                debug_log(LogLevel::Warn, LogMode::Nested, "ForceStop: Window not found");
+            }
             display_notification(Notification::GpgShutdown);
         }
         Command::Echo { text } => {

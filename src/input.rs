@@ -13,41 +13,36 @@ use windows::Win32::{
 use crate::{
     capture::debug_capture,
     config::{DISPLAY_HEIGHT, DISPLAY_WIDTH},
-    logging::{debug_log, LogLevel, LogMode},
-    window::{find_game_window, get_window_info},
+    window::GameWindow,
 };
 
 const INPUT_DELAY_MS: u64 = 10;
 const TEXT_INPUT_DELAY_MS: u64 = 50;
 const SWIPE_SPEED: u32 = 10;
 
-pub fn input_tap(x: i32, y: i32) {
-    debug_capture(x, y, None);
+pub fn input_tap(window: &GameWindow, x: i32, y: i32) {
+    debug_capture(window, x, y, None);
 
-    let (hwnd, w, h) = get_window_info();
+    let (w, h) = window.get_info();
     let pos = get_relative_point(x, y, w, h);
 
-    send_cancel_mode(hwnd);
-    post_message(hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos));
+    send_cancel_mode(window.hwnd);
+    post_message(window.hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos));
     thread::sleep(Duration::from_millis(INPUT_DELAY_MS));
-    post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos));
+    post_message(window.hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos));
     thread::sleep(Duration::from_millis(INPUT_DELAY_MS));
-    post_message(hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(pos));
+    post_message(window.hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(pos));
 }
 
-pub fn input_text(text: &str) {
-    let Some(hwnd) = find_game_window() else {
-        debug_log(LogLevel::Warn, LogMode::Nested, "input_text: Window not found");
-        return;
-    };
+pub fn input_text(window: &GameWindow, text: &str) {
     for ch in text.chars() {
-        post_message(hwnd, WM_CHAR, WPARAM(ch as usize), LPARAM(0));
+        post_message(window.hwnd, WM_CHAR, WPARAM(ch as usize), LPARAM(0));
         thread::sleep(Duration::from_millis(TEXT_INPUT_DELAY_MS));
     }
 }
 
-pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
-    let (hwnd, w, h) = get_window_info();
+pub fn input_swipe(window: &GameWindow, x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
+    let (w, h) = window.get_info();
     let effective_duration = Duration::from_millis((duration as f32 / SWIPE_SPEED as f32).max(1.0) as u64);
     let start_time = Instant::now();
 
@@ -55,8 +50,8 @@ pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
     let dy = (y2 - y1) as f32;
 
     let pos_down = get_relative_point(x1, y1, w, h);
-    send_cancel_mode(hwnd);
-    post_message(hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos_down));
+    send_cancel_mode(window.hwnd);
+    post_message(window.hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos_down));
     thread::sleep(Duration::from_millis(INPUT_DELAY_MS));
 
     let mut last_pos = pos_down;
@@ -74,7 +69,7 @@ pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
 
         let pos = get_relative_point(nx, ny, w, h);
         if pos != last_pos {
-            post_message(hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos));
+            post_message(window.hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos));
             last_pos = pos;
         }
 
@@ -82,38 +77,30 @@ pub fn input_swipe(x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
     }
 
     let pos_up = get_relative_point(x2, y2, w, h);
-    post_message(hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos_up));
+    post_message(window.hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos_up));
     thread::sleep(Duration::from_millis(INPUT_DELAY_MS));
-    post_message(hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(pos_up));
+    post_message(window.hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(pos_up));
 
-    debug_capture(x1, y1, Some((x2, y2)));
+    debug_capture(window, x1, y1, Some((x2, y2)));
 }
 
-pub fn input_keyevent(keycode: i32) {
-    let Some(hwnd) = find_game_window() else {
-        debug_log(LogLevel::Warn, LogMode::Nested, "input_keyevent: Window not found");
-        return;
-    };
+pub fn input_keyevent(window: &GameWindow, keycode: i32) {
     let wparam = WPARAM(keycode as usize);
     let down = LPARAM((keycode << 16) as isize);
     let up = LPARAM((keycode << 16 | 1 << 30 | 1 << 31) as isize);
-    post_message(hwnd, WM_KEYDOWN, wparam, down);
-    post_message(hwnd, WM_KEYUP, wparam, up);
+    post_message(window.hwnd, WM_KEYDOWN, wparam, down);
+    post_message(window.hwnd, WM_KEYUP, wparam, up);
 }
 
-pub fn terminate() {
-    let Some(hwnd) = find_game_window() else {
-        debug_log(LogLevel::Warn, LogMode::Nested, "terminate: Window not found");
-        return;
-    };
-    post_message(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+pub fn terminate(window: &GameWindow) {
+    post_message(window.hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
 }
 
 pub fn post_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) {
     unsafe { _ = PostMessageA(Some(hwnd), msg, wparam, lparam) };
 }
 
-fn send_cancel_mode(hwnd: HWND) {
+pub fn send_cancel_mode(hwnd: HWND) {
     let target_hwnd = unsafe { GetParent(hwnd).ok().filter(|parent| !parent.0.is_null()).unwrap_or(hwnd) };
     post_message(target_hwnd, WM_CANCELMODE, WPARAM(0), LPARAM(0));
 }

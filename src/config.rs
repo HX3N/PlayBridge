@@ -1,10 +1,10 @@
-use crate::notification::{display_notification, Notification};
 use chrono::Utc;
 use once_cell::sync::Lazy;
 use std::sync::{Arc, RwLock};
 use winreg::{enums::*, types::FromRegValue, RegKey};
 
 use crate::logging::{debug_log, LogLevel, LogMode};
+use crate::notification::{display_notification, Notification};
 
 pub const DISPLAY_WIDTH: u32 = 1280;
 pub const DISPLAY_HEIGHT: u32 = 720;

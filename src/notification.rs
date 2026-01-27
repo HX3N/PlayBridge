@@ -12,12 +12,10 @@ const DISPLAY_NAME: &str = "PlayBridge";
 
 const ICON_DATA: &[u8] = include_bytes!("../assets/icon.png");
 
-pub fn get_value(key: &str) -> u32 {
-    get_registry_dword(key, REG_PATH_STATE).unwrap_or(0)
-}
-
-pub fn set_value(key: &str, value: u32) {
-    let _ = set_registry_dword(key, value, REG_PATH_STATE);
+#[derive(Debug)]
+pub enum ResizeReason {
+    TooSmall,
+    TooLarge,
 }
 
 #[derive(Debug)]
@@ -25,11 +23,10 @@ pub enum Notification {
     Screenshot,
     ScreenshotFailed,
     GpgShutdown,
-    WindowChanged(u32, u32),
     WindowMinimized,
-    WindowTooSmall(u32, u32),
-    WindowTooLarge(u32, u32),
     WindowWrongRatio(f32),
+    WindowAutoResized { prev_w: u32, prev_h: u32, target_w: u32, target_h: u32, reason: ResizeReason },
+    WindowMaximizedRestored,
     UnknownCommand(String),
     Panic(String),
     UpdateAvailable(String),
@@ -40,14 +37,14 @@ pub enum Notification {
 impl Notification {
     fn level(&self) -> LogLevel {
         match self {
-            Self::Screenshot | Self::GpgShutdown | Self::WindowChanged(..) => LogLevel::Info,
+            Self::Screenshot | Self::GpgShutdown => LogLevel::Info,
 
             Self::WindowMinimized
-            | Self::WindowTooSmall(..)
-            | Self::WindowTooLarge(..)
             | Self::WindowWrongRatio(..)
             | Self::UnsupportedClient(..)
-            | Self::ClientMismatch(..) => LogLevel::Warn,
+            | Self::ClientMismatch(..)
+            | Self::WindowAutoResized { .. }
+            | Self::WindowMaximizedRestored => LogLevel::Warn,
 
             Self::ScreenshotFailed | Self::UnknownCommand(..) | Self::Panic(..) => LogLevel::Error,
 
@@ -57,7 +54,7 @@ impl Notification {
 
     fn tag(&self) -> String {
         let debug_str = format!("{:?}", self);
-        debug_str.split('(').next().unwrap_or(&debug_str).to_string()
+        debug_str.split(|c| c == '(' || c == '{').next().unwrap_or(&debug_str).to_string()
     }
 
     fn body(&self) -> String {
@@ -69,25 +66,30 @@ impl Notification {
 
     fn body_en(&self) -> String {
         match self {
-            Self::Screenshot => "Screenshot saved to desktop".into(),
-            Self::GpgShutdown => "Google Play Games is shutting down".into(),
-            Self::WindowChanged(w, h) => format!("Window size changed ({}x{})", w, h),
+            Self::Screenshot => "Screenshot saved to the desktop".into(),
+            Self::GpgShutdown => "Google Play Games has shut down".into(),
 
-            Self::WindowMinimized => "Minimized window is not supported".into(),
-            Self::WindowTooSmall(w, h) => format!("Window too small ({}x{})\nMAA may not work properly", w, h),
-            Self::WindowTooLarge(w, h) => format!("Window too large ({}x{})\nMAA may not work properly", w, h),
-            Self::WindowWrongRatio(r) => format!("Wrong aspect ratio (16:{:.2})\nPlease set to 16:9", r),
+            Self::WindowMinimized => "Minimized windows are not supported".into(),
+            Self::WindowWrongRatio(r) => format!("Incorrect aspect ratio (16:{:.2})\nPlease set it to 16:9", r),
+            Self::WindowAutoResized { prev_w, prev_h, target_w, target_h, reason } => {
+                let reason_str = match reason {
+                    ResizeReason::TooSmall => "too small",
+                    ResizeReason::TooLarge => "too large",
+                };
+                format!("Window was {} ({}x{}).\nAuto-resized to {}x{}", reason_str, prev_w, prev_h, target_w, target_h)
+            }
+            Self::WindowMaximizedRestored => "Window was too large; restored from maximized state".into(),
 
-            Self::ScreenshotFailed => "Screenshot failed, can't find the window".into(),
+            Self::ScreenshotFailed => "Screenshot failed; window not found".into(),
             Self::UnknownCommand(c) => format!("Unknown command\n{}", c),
             Self::Panic(msg) => format!("Fatal error\n{}", msg),
 
-            Self::UpdateAvailable(v) => format!("New version found ({})\nDownload from GitHub Releases", v),
+            Self::UpdateAvailable(v) => format!("A new version is available ({})\nDownload it from GitHub Releases", v),
             Self::UnsupportedClient(r) => {
-                format!("Requested client is not supported\nPlease check 'Client' in MAA 'Game Settings'\nRequested: {}", r)
+                format!("The requested client is not supported\nPlease check 'Client' in MAA 'Game Settings'\nRequested: {}", r)
             }
             Self::ClientMismatch(r, i) => {
-                format!("Requested client does not match installed client\nPlease check 'Client' in MAA 'Game Settings'\nRequested: {}\nInstalled: {}", r, i)
+                format!("The requested client does not match the installed version\nPlease check 'Client' in MAA 'Game Settings'\nRequested: {}\nInstalled: {}", r, i)
             }
         }
     }
@@ -96,12 +98,17 @@ impl Notification {
         match self {
             Self::Screenshot => "스크린샷이 바탕화면에 저장됐어요".into(),
             Self::GpgShutdown => "Google Play Games가 종료됐어요".into(),
-            Self::WindowChanged(w, h) => format!("창 크기가 변경됐어요 ({}x{})", w, h),
 
             Self::WindowMinimized => "최소화된 창은 지원하지 않아요".into(),
-            Self::WindowTooSmall(w, h) => format!("창 크기가 너무 작아요 ({}x{})\nMAA가 제대로 동작하지 않을 수 있어요", w, h),
-            Self::WindowTooLarge(w, h) => format!("창 크기가 너무 커요 ({}x{})\nMAA가 제대로 동작하지 않을 수 있어요", w, h),
             Self::WindowWrongRatio(r) => format!("화면 비율이 맞지 않아요 (16:{:.2})\n16:9 비율로 설정해주세요", r),
+            Self::WindowAutoResized { prev_w, prev_h, target_w, target_h, reason } => {
+                let reason_str = match reason {
+                    ResizeReason::TooSmall => "너무 작아요",
+                    ResizeReason::TooLarge => "너무 커요",
+                };
+                format!("창 크기가 {} ({}x{})\n{}x{}로 자동 조절됐어요", reason_str, prev_w, prev_h, target_w, target_h)
+            }
+            Self::WindowMaximizedRestored => "창이 너무 커서 최대화 상태를 해제했어요".into(),
 
             Self::ScreenshotFailed => "스크린샷 실패, 창을 찾을 수 없어요".into(),
             Self::UnknownCommand(c) => format!("알 수 없는 명령어\n{}", c),
@@ -119,8 +126,8 @@ impl Notification {
 
     fn cooldown(&self) -> Option<u64> {
         match self {
-            Self::WindowTooSmall(..) | Self::WindowTooLarge(..) | Self::WindowWrongRatio(..) => Some(10),
-            Self::WindowMinimized | Self::WindowChanged(..) => Some(2),
+            Self::WindowWrongRatio(..) => Some(10),
+            Self::WindowMinimized | Self::WindowAutoResized { .. } | Self::WindowMaximizedRestored => Some(2),
             _ => None,
         }
     }
