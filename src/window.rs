@@ -149,10 +149,11 @@ pub fn start_game_if_needed() {
         return;
     }
 
-    let client = config().client;
     if !is_loading_screen_active() {
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Launching Google Play Games: {}", client.package()));
-        let _ = open::that(format!("googleplaygames://launch/?id={}", client.package()));
+        let launch_uri = format!("googleplaygames://launch/?id={}&pid=1", config().client.package());
+
+        debug_log(LogLevel::Info, LogMode::Nested, &format!("Launching Google Play Games: {}", launch_uri));
+        let _ = open::that(launch_uri);
     }
 
     debug_log(LogLevel::Info, LogMode::Nested, "Waiting for Arknights");
