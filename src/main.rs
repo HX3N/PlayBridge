@@ -11,7 +11,7 @@ use crate::config::{check_benchmark_mode, check_for_update, check_version, toggl
 use crate::config::{peek_benchmark_mode, set_benchmark_mode};
 use crate::logging::{debug_log, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification};
-use crate::window::{apply_intent_package, ensure_game_ready, start_game_if_needed, GameWindow};
+use crate::window::{apply_intent_package, ensure_game_ready, print_window_list, start_game_if_needed, GameWindow};
 
 const BENCHMARK_DELAY_MS: u64 = 50;
 
@@ -40,6 +40,7 @@ fn main() {
 enum Command {
     Empty,
     ToggleDebug,
+    WindowList,
     Connect,
     GetPropRelease,
     StartActivity { intent: String },
@@ -65,6 +66,7 @@ fn parse_command(args: &[String]) -> Command {
     let full_command = args.join(" ");
     match full_command.as_str() {
         c if c.contains("--debug") => Command::ToggleDebug,
+        c if c.contains("--list") => Command::WindowList,
         c if c.contains("disconnect") => Command::Ignore,
         c if c.contains("connect") => Command::Connect,
         c if c.contains("getprop ro.build.version.release") => Command::GetPropRelease,
@@ -111,6 +113,9 @@ fn execute_command(command: Command) {
         }
         Command::ToggleDebug => {
             toggle_debug();
+        }
+        Command::WindowList => {
+            print_window_list();
         }
         Command::Connect => {
             println!("connected to Google Play Games");

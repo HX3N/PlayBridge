@@ -167,6 +167,36 @@ pub fn start_game_if_needed() {
     }
 }
 
+pub fn print_window_list() {
+    let windows = window_list().unwrap_or_default();
+    let mut max_hwnd_len = 4;
+    let mut max_class_len = 5;
+
+    let rows: Vec<_> = windows
+        .into_iter()
+        .map(|win| {
+            let hwnd = format!("{:?}", win.hwnd);
+            let class = get_window_class(HWND(win.hwnd as usize as *mut c_void))
+                .map(|mut c| {
+                    if let Some(pos) = c.find('[') {
+                        c.truncate(pos);
+                    }
+                    c.trim().to_string()
+                })
+                .unwrap_or_default();
+
+            max_hwnd_len = max_hwnd_len.max(hwnd.len());
+            max_class_len = max_class_len.max(class.len());
+            (hwnd, class, win.window_name)
+        })
+        .collect();
+
+    println!("{:<hw$}  {:<cl$}  TITLE", "HWND", "CLASS", hw = max_hwnd_len, cl = max_class_len);
+    for (hwnd, class, title) in rows {
+        println!("{:<hw$}  {:<cl$}  {}", hwnd, class, title, hw = max_hwnd_len, cl = max_class_len);
+    }
+}
+
 fn find_installed_package() -> Option<String> {
     let local_app_data = std::env::var("LOCALAPPDATA").ok()?;
     let cache_path = format!("{}/{}", local_app_data, CACHE_PATH);
