@@ -22,6 +22,7 @@ pub enum LogLevel {
 pub enum LogMode {
     Start,
     Nested,
+    Event,
     End,
 }
 
@@ -50,6 +51,7 @@ pub fn debug_log(level: LogLevel, mode: LogMode, message: &str) {
     let log = match mode {
         LogMode::Start => format!("[{}][{}] {}", now, level_tag, flat_message),
         LogMode::Nested => format!("[{}][{}] │ {}", now, level_tag, flat_message),
+        LogMode::Event => format!("[{}][{}] X {}", now, level_tag, flat_message),
         LogMode::End => format!("[{}][{}] └ {}", now, level_tag, flat_message),
     };
 
