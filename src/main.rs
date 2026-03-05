@@ -107,7 +107,7 @@ fn parse_command(args: &[String]) -> Command {
             y2: args[8].parse().unwrap_or(0),
             duration: args[9].parse().unwrap_or(0),
         },
-        c if c.contains("input keyevent 111") => Command::KeyEvent { keycode: 0x01 },
+        c if c.contains("input keyevent") => Command::KeyEvent { keycode: args[5].parse().unwrap_or(0) },
         c if c.contains("input text") => Command::Text { text: args[5..].join(" ") },
 
         c if c.contains("cat /proc/net/arp")

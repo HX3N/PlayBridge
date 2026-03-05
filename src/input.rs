@@ -5,23 +5,22 @@ use std::{
 
 use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
-    UI::WindowsAndMessaging::{
-        GetParent, PostMessageA, WM_CANCELMODE, WM_CLOSE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    },
+    UI::WindowsAndMessaging::{PostMessageW, WM_CANCELMODE, WM_CLOSE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE},
 };
 
 use crate::{
+    capture::debug_capture_path,
     config::{DISPLAY_HEIGHT, DISPLAY_WIDTH},
     logging::{debug_log, LogLevel, LogMode},
-    window::GameWindow,
+    window::{parent_or_self, GameWindow},
 };
 
 pub fn post_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) {
-    unsafe { _ = PostMessageA(Some(hwnd), msg, wparam, lparam) };
+    unsafe { _ = PostMessageW(Some(hwnd), msg, wparam, lparam) };
 }
 
 pub fn send_cancel_mode(hwnd: HWND) {
-    let target_hwnd = unsafe { GetParent(hwnd).ok().filter(|parent| !parent.0.is_null()).unwrap_or(hwnd) };
+    let target_hwnd = parent_or_self(hwnd);
     post_message(target_hwnd, WM_CANCELMODE, WPARAM(0), LPARAM(0));
 }
 
@@ -48,12 +47,13 @@ pub fn run_minitouch_daemon() {
     let mut current_pos: Option<(i32, i32)> = None;
     let mut is_down = false;
     let mut last_relative_pos = 0;
+    let mut touch_path: Vec<(i32, i32)> = Vec::new();
 
     let mut window = match GameWindow::find() {
         Some(w) => w,
         None => return,
     };
-    let (mut w_width, mut w_height) = window.get_info();
+    let (mut w_width, mut w_height) = window.get_client_size();
 
     while let Some(Ok(line)) = iterator.next() {
         if line.is_empty() {
@@ -101,7 +101,7 @@ pub fn run_minitouch_daemon() {
                 // Re-evaluate window handle and size on every commit
                 if let Some(new_win) = GameWindow::find() {
                     window = new_win;
-                    let (new_w, new_h) = window.get_info();
+                    let (new_w, new_h) = window.get_client_size();
                     w_width = new_w;
                     w_height = new_h;
                 }
@@ -114,7 +114,10 @@ pub fn run_minitouch_daemon() {
                         post_message(window.hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos));
                         post_message(window.hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos));
                         is_down = true;
+                        touch_path.clear();
+                        touch_path.push((x, y));
                     } else if pos != last_relative_pos {
+                        touch_path.push((x, y));
                         post_message(window.hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos));
                     }
                     last_relative_pos = pos;
@@ -123,6 +126,8 @@ pub fn run_minitouch_daemon() {
                     post_message(window.hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(last_relative_pos));
                     post_message(window.hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(last_relative_pos));
                     is_down = false;
+                    debug_capture_path(&window, &touch_path);
+                    touch_path.clear();
                 }
             }
             // "r" (RESET): r
@@ -132,7 +137,7 @@ pub fn run_minitouch_daemon() {
                 // Re-evaluate window handle and size on reset
                 if let Some(new_win) = GameWindow::find() {
                     window = new_win;
-                    let (new_w, new_h) = window.get_info();
+                    let (new_w, new_h) = window.get_client_size();
                     w_width = new_w;
                     w_height = new_h;
                 }
@@ -143,6 +148,7 @@ pub fn run_minitouch_daemon() {
                     is_down = false;
                 }
                 current_pos = None;
+                touch_path.clear();
             }
             // "k" (KEY EVENT): k <keycode> <action>
             "k" => {

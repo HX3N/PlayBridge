@@ -1,6 +1,5 @@
 use chrono::Utc;
-use once_cell::sync::Lazy;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 use winreg::{enums::*, types::FromRegValue, RegKey};
 
 use crate::logging::{debug_log, LogLevel, LogMode};
@@ -86,7 +85,7 @@ impl Config {
     }
 }
 
-pub static CONFIG: Lazy<Arc<RwLock<Config>>> = Lazy::new(|| Arc::new(RwLock::new(Config::default())));
+pub static CONFIG: LazyLock<Arc<RwLock<Config>>> = LazyLock::new(|| Arc::new(RwLock::new(Config::default())));
 
 pub fn config() -> std::sync::RwLockReadGuard<'static, Config> {
     CONFIG.read().unwrap()

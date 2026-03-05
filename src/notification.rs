@@ -60,71 +60,73 @@ impl Notification {
     }
 
     fn body(&self) -> String {
-        match config().client {
-            Client::KR => self.body_kr(),
-            _ => self.body_en(),
-        }
-    }
+        let (en, kr) = match self {
+            Self::Screenshot => (
+                "Screenshot saved to the desktop".into(),
+                "스크린샷이 바탕화면에 저장됐어요".into(),
+            ),
+            Self::GpgShutdown => (
+                "Google Play Games has shut down".into(),
+                "Google Play Games가 종료됐어요".into(),
+            ),
 
-    fn body_en(&self) -> String {
-        match self {
-            Self::Screenshot => "Screenshot saved to the desktop".into(),
-            Self::GpgShutdown => "Google Play Games has shut down".into(),
-
-            Self::WindowMinimized => "Minimized windows are not supported".into(),
-            Self::WindowWrongRatio(r) => format!("Incorrect aspect ratio (16:{:.2})\nPlease set it to 16:9", r),
+            Self::WindowMinimized => (
+                "Minimized windows are not supported".into(),
+                "최소화된 창은 지원하지 않아요".into(),
+            ),
+            Self::WindowWrongRatio(r) => (
+                format!("Incorrect aspect ratio (16:{:.2})\nPlease set it to 16:9", r),
+                format!("화면 비율이 맞지 않아요 (16:{:.2})\n16:9 비율로 설정해주세요", r),
+            ),
             Self::WindowAutoResized { prev_w, prev_h, target_w, target_h, reason } => {
-                let reason_str = match reason {
-                    ResizeReason::TooSmall => "too small",
-                    ResizeReason::TooLarge => "too large",
+                let (reason_en, reason_kr) = match reason {
+                    ResizeReason::TooSmall => ("too small", "너무 작아요"),
+                    ResizeReason::TooLarge => ("too large", "너무 커요"),
                 };
-                format!("Window was {} ({}x{}).\nAuto-resized to {}x{}", reason_str, prev_w, prev_h, target_w, target_h)
+                (
+                    format!("Window was {} ({}x{}).\nAuto-resized to {}x{}", reason_en, prev_w, prev_h, target_w, target_h),
+                    format!("창 크기가 {} ({}x{})\n{}x{}로 자동 조절됐어요", reason_kr, prev_w, prev_h, target_w, target_h),
+                )
             }
-            Self::WindowMaximizedRestored => "Window was too large; restored from maximized state".into(),
+            Self::WindowMaximizedRestored => (
+                "Window was too large; restored from maximized state".into(),
+                "창이 너무 커서 최대화 상태를 해제했어요".into(),
+            ),
 
-            Self::ScreenshotFailed => "Screenshot failed; window not found".into(),
-            Self::UnknownCommand(c) => format!("Unknown command\n{}", c),
-            Self::Panic(msg) => format!("Fatal error\n{}", msg),
+            Self::ScreenshotFailed => (
+                "Screenshot failed; window not found".into(),
+                "스크린샷 실패, 창을 찾을 수 없어요".into(),
+            ),
+            Self::UnknownCommand(c) => (
+                format!("Unknown command\n{}", c),
+                format!("알 수 없는 명령어\n{}", c),
+            ),
+            Self::Panic(msg) => (
+                format!("Fatal error\n{}", msg),
+                format!("치명적인 오류 발생\n{}", msg),
+            ),
 
-            Self::UpdateAvailable(v) => format!("A new version is available ({})\nDownload it from GitHub Releases", v),
-            Self::UnsupportedClient(r) => {
-                format!("The requested client is not supported\nPlease check 'Client' in MAA 'Game Settings'\nRequested: {}", r)
-            }
-            Self::ClientMismatch(r, i) => {
-                format!("The requested client does not match the installed version\nPlease check 'Client' in MAA 'Game Settings'\nRequested: {}\nInstalled: {}", r, i)
-            }
-            Self::AdbInputDeprecation => "Current input method is ADB Input\nWe recommend changing it to Minitouch".into(),
-        }
-    }
-
-    fn body_kr(&self) -> String {
-        match self {
-            Self::Screenshot => "스크린샷이 바탕화면에 저장됐어요".into(),
-            Self::GpgShutdown => "Google Play Games가 종료됐어요".into(),
-
-            Self::WindowMinimized => "최소화된 창은 지원하지 않아요".into(),
-            Self::WindowWrongRatio(r) => format!("화면 비율이 맞지 않아요 (16:{:.2})\n16:9 비율로 설정해주세요", r),
-            Self::WindowAutoResized { prev_w, prev_h, target_w, target_h, reason } => {
-                let reason_str = match reason {
-                    ResizeReason::TooSmall => "너무 작아요",
-                    ResizeReason::TooLarge => "너무 커요",
-                };
-                format!("창 크기가 {} ({}x{})\n{}x{}로 자동 조절됐어요", reason_str, prev_w, prev_h, target_w, target_h)
-            }
-            Self::WindowMaximizedRestored => "창이 너무 커서 최대화 상태를 해제했어요".into(),
-
-            Self::ScreenshotFailed => "스크린샷 실패, 창을 찾을 수 없어요".into(),
-            Self::UnknownCommand(c) => format!("알 수 없는 명령어\n{}", c),
-            Self::Panic(msg) => format!("치명적인 오류 발생\n{}", msg),
-
-            Self::UpdateAvailable(v) => format!("신규 버전을 발견했어요 ({})\nGitHub Releases에서 다운로드해주세요", v),
-            Self::UnsupportedClient(r) => {
-                format!("요청된 클라이언트는 지원하지 않아요\nMAA '실행 설정'에서 '클라이언트'를 확인해주세요\n요청됨: {}", r)
-            }
-            Self::ClientMismatch(r, i) => {
-                format!("요청된 클라이언트와 설치된 클라이언트가 달라요\nMAA '실행 설정'에서 '클라이언트'를 확인해주세요\n요청됨: {}\n설치됨: {}", r, i)
-            }
-            Self::AdbInputDeprecation => "현재 입력 방식이 ADB Input 이에요\nMinitouch로 변경하는걸 권장해요".into(),
+            Self::UpdateAvailable(v) => (
+                format!("A new version is available ({})\nDownload it from GitHub Releases", v),
+                format!("신규 버전을 발견했어요 ({})\nGitHub Releases에서 다운로드해주세요", v),
+            ),
+            Self::UnsupportedClient(r) => (
+                format!("The requested client is not supported\nPlease check 'Client' in MAA 'Game Settings'\nRequested: {}", r),
+                format!("요청된 클라이언트는 지원하지 않아요\nMAA '실행 설정'에서 '클라이언트'를 확인해주세요\n요청됨: {}", r),
+            ),
+            Self::ClientMismatch(r, i) => (
+                format!("The requested client does not match the installed version\nPlease check 'Client' in MAA 'Game Settings'\nRequested: {}\nInstalled: {}", r, i),
+                format!("요청된 클라이언트와 설치된 클라이언트가 달라요\nMAA '실행 설정'에서 '클라이언트'를 확인해주세요\n요청됨: {}\n설치됨: {}", r, i),
+            ),
+            Self::AdbInputDeprecation => (
+                "Current input method is ADB Input\nWe recommend changing it to Minitouch".into(),
+                "현재 입력 방식이 ADB Input 이에요\nMinitouch로 변경하는걸 권장해요".into(),
+            ),
+        };
+        if config().client == Client::KR {
+            kr
+        } else {
+            en
         }
     }
 
@@ -138,30 +140,13 @@ impl Notification {
     }
 
     fn title(&self) -> String {
-        match config().client {
-            Client::KR => self.title_kr(),
-            _ => self.title_en(),
-        }
-    }
-
-    fn title_en(&self) -> String {
-        match self.level() {
-            LogLevel::Update => "🎉 Update",
-            LogLevel::Info => "ℹ️ Info",
-            LogLevel::Warn => "⚠️ Warning",
-            LogLevel::Error => "⛔ ERROR",
-        }
-        .into()
-    }
-
-    fn title_kr(&self) -> String {
-        match self.level() {
-            LogLevel::Update => "🎉 업데이트",
-            LogLevel::Info => "ℹ️ 정보",
-            LogLevel::Warn => "⚠️ 경고",
-            LogLevel::Error => "⛔ 오류",
-        }
-        .into()
+        let (en, kr) = match self.level() {
+            LogLevel::Update => ("🎉 Update", "🎉 업데이트"),
+            LogLevel::Info => ("ℹ️ Info", "ℹ️ 정보"),
+            LogLevel::Warn => ("⚠️ Warning", "⚠️ 경고"),
+            LogLevel::Error => ("⛔ ERROR", "⛔ 오류"),
+        };
+        if config().client == Client::KR { kr } else { en }.into()
     }
 }
 
@@ -184,7 +169,7 @@ pub fn display_notification(notification: Notification) {
     let icon_path = env::temp_dir().join("playbridge.png");
 
     if !icon_path.exists() {
-        fs::write(&icon_path, ICON_DATA).unwrap();
+        let _ = fs::write(&icon_path, ICON_DATA);
     }
 
     let _ = register(AUM_ID, DISPLAY_NAME, Some(&icon_path));
@@ -199,9 +184,9 @@ pub fn display_notification(notification: Notification) {
         .text3(winrt_toast::content::text::Text::new(format!("tag: {}", tag)).with_placement(TextPlacement::Attribution));
     toast.scenario(Scenario::Reminder);
 
-    manager.show(&toast).unwrap();
+    let _ = manager.show(&toast);
 
-    set_registry_dword(&tag, now as u32, REG_PATH_COOLDOWN).unwrap();
+    let _ = set_registry_dword(&tag, now as u32, REG_PATH_COOLDOWN);
 }
 
 fn check_notification_registry(tag: &str, now: u64, cooldown_seconds: u64) -> bool {

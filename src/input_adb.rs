@@ -23,7 +23,7 @@ pub fn input_tap(window: &GameWindow, x: i32, y: i32) {
     display_notification(Notification::AdbInputDeprecation);
     debug_capture(window, x, y, None);
 
-    let (w, h) = window.get_info();
+    let (w, h) = window.get_client_size();
     let pos = get_relative_point(x, y, w, h);
 
     send_cancel_mode(window.hwnd);
@@ -37,7 +37,7 @@ pub fn input_tap(window: &GameWindow, x: i32, y: i32) {
 pub fn input_swipe(window: &GameWindow, x1: i32, y1: i32, x2: i32, y2: i32, duration: i32) {
     display_notification(Notification::AdbInputDeprecation);
 
-    let (w, h) = window.get_info();
+    let (w, h) = window.get_client_size();
     let effective_duration = Duration::from_millis((duration as f32 / SWIPE_SPEED as f32).max(1.0) as u64);
     let start_time = Instant::now();
 
@@ -79,10 +79,15 @@ pub fn input_swipe(window: &GameWindow, x1: i32, y1: i32, x2: i32, y2: i32, dura
     debug_capture(window, x1, y1, Some((x2, y2)));
 }
 
-pub fn input_keyevent(window: &GameWindow, keycode: i32) {
-    let wparam = WPARAM(keycode as usize);
-    let down = LPARAM((keycode << 16) as isize);
-    let up = LPARAM((keycode << 16 | 1 << 30 | 1 << 31) as isize);
+pub fn input_keyevent(window: &GameWindow, adb_keycode: i32) {
+    let vk_code = match adb_keycode {
+        111 => 0x1B, // KEYCODE_ESCAPE -> VK_ESCAPE
+        _ => return,
+    };
+
+    let wparam = WPARAM(vk_code as usize);
+    let down = LPARAM((vk_code << 16) as isize);
+    let up = LPARAM((vk_code << 16 | 1 << 30 | 1 << 31) as isize);
     post_message(window.hwnd, WM_KEYDOWN, wparam, down);
     post_message(window.hwnd, WM_KEYUP, wparam, up);
 }
