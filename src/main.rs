@@ -3,7 +3,6 @@ use std::{env, thread, time::Duration, time::Instant};
 mod capture;
 mod config;
 mod input;
-mod input_adb;
 mod logging;
 mod notification;
 mod window;
@@ -63,11 +62,12 @@ enum Command {
     DumpsysInputOrientation,
     MinitouchDaemon,
 
-    // [ADB Input]
-    Tap { x: i32, y: i32 },
-    Swipe { x1: i32, y1: i32, x2: i32, y2: i32, duration: i32 },
+    // [Key & Text Input]
     KeyEvent { keycode: i32 },
     Text { text: String },
+
+    // [Unsupported ADB Touch Input]
+    AdbInputUnsupported,
 
     // [Fallback]
     Ignore,
@@ -99,15 +99,8 @@ fn parse_command(args: &[String]) -> Command {
         c if c.contains("dumpsys input") && c.contains("SurfaceOrientation") => Command::DumpsysInputOrientation,
         c if c.contains("/data/local/tmp/") && c.contains("-i") => Command::MinitouchDaemon,
 
-        c if c.contains("input tap") => Command::Tap { x: args[5].parse().unwrap_or(0), y: args[6].parse().unwrap_or(0) },
-        c if c.contains("input swipe") => Command::Swipe {
-            x1: args[5].parse().unwrap_or(0),
-            y1: args[6].parse().unwrap_or(0),
-            x2: args[7].parse().unwrap_or(0),
-            y2: args[8].parse().unwrap_or(0),
-            duration: args[9].parse().unwrap_or(0),
-        },
-        c if c.contains("input keyevent 111") => Command::KeyEvent { keycode: 0x01 },
+        c if c.contains("input tap") || c.contains("input swipe") => Command::AdbInputUnsupported,
+        c if c.contains("input keyevent") => Command::KeyEvent { keycode: args[5].parse().unwrap_or(0) },
         c if c.contains("input text") => Command::Text { text: args[5..].join(" ") },
 
         c if c.contains("cat /proc/net/arp")
@@ -217,33 +210,23 @@ fn execute_command(command: Command) {
             input::run_minitouch_daemon();
         }
 
-        Command::Tap { x, y } => {
-            if let Some(w) = window {
-                input_adb::input_tap(&w, x, y);
-            } else {
-                debug_log(LogLevel::Warn, LogMode::Nested, "Tap: Window not found");
-            }
-        }
-        Command::Swipe { x1, y1, x2, y2, duration } => {
-            if let Some(w) = window {
-                input_adb::input_swipe(&w, x1, y1, x2, y2, duration);
-            } else {
-                debug_log(LogLevel::Warn, LogMode::Nested, "Swipe: Window not found");
-            }
-        }
         Command::KeyEvent { keycode } => {
             if let Some(w) = window {
-                input_adb::input_keyevent(&w, keycode);
+                input::input_keyevent(&w, keycode);
             } else {
                 debug_log(LogLevel::Warn, LogMode::Nested, "KeyEvent: Window not found");
             }
         }
         Command::Text { text } => {
             if let Some(w) = window {
-                input_adb::input_text(&w, &text);
+                input::input_text(&w, &text);
             } else {
                 debug_log(LogLevel::Warn, LogMode::Nested, "Text: Window not found");
             }
+        }
+
+        Command::AdbInputUnsupported => {
+            display_notification(Notification::AdbInputUnsupported);
         }
 
         Command::Ignore => {}

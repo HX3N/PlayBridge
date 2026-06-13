@@ -15,15 +15,15 @@ Then, go to **MAA > Settings > Connection** and configure as follows:
 
 ![img](./assets/readme.png)
 
-| ADB path      | Connection address | Connection Preset         | Touch Mode            |
-| ------------- | ------------------ | ------------------------- | --------------------- |
-| PlayBridgeADB | GooglePlayGames    | General (Compatible Mode) | Minitouch (ADB Input) |
+| ADB path      | Connection address | Connection Preset         | Touch Mode |
+| ------------- | ------------------ | ------------------------- | ---------- |
+| PlayBridgeADB | GooglePlayGames    | General (Compatible Mode) | Minitouch  |
 
 </div>
 
 > [!TIP]
-> **Minitouch** is the recommended input method for precise swipes.<br>
-> **ADB Input** is considered legacy and will trigger a deprecation warning if used.
+> **Minitouch** is the only supported input method.<br>
+> **ADB Input** is no longer supported.
 
 ## Screenshot
 

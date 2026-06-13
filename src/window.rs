@@ -23,6 +23,10 @@ const LOADING_TITLE: &str = "Google Play Games";
 const CACHE_PATH: &str = "Google/Play Games/image_cache";
 const WINDOW_RESTORE_DELAY_MS: u64 = 300;
 
+pub fn parent_or_self(hwnd: HWND) -> HWND {
+    unsafe { GetParent(hwnd).ok().filter(|p| !p.0.is_null()).unwrap_or(hwnd) }
+}
+
 pub struct GameWindow {
     pub hwnd: HWND,
 }
@@ -51,7 +55,7 @@ impl GameWindow {
     }
 
     pub fn restore(&self) {
-        let target_hwnd = unsafe { GetParent(self.hwnd).ok().filter(|parent| !parent.0.is_null()).unwrap_or(self.hwnd) };
+        let target_hwnd = parent_or_self(self.hwnd);
 
         if unsafe { IsIconic(target_hwnd).as_bool() } {
             display_notification(Notification::WindowMinimized);
@@ -63,10 +67,10 @@ impl GameWindow {
     pub fn resize(&self, current_w: u32, current_h: u32, target_w: u32, target_h: u32) {
         send_cancel_mode(self.hwnd);
 
-        let top_hwnd = get_top_level_parent(self.hwnd);
+        let target_hwnd = parent_or_self(self.hwnd);
 
         let mut top_rect = RECT::default();
-        unsafe { _ = GetWindowRect(top_hwnd, &mut top_rect) };
+        unsafe { _ = GetWindowRect(target_hwnd, &mut top_rect) };
 
         let top_w = top_rect.right - top_rect.left;
         let top_h = top_rect.bottom - top_rect.top;
@@ -75,9 +79,9 @@ impl GameWindow {
         let offset_h = top_h - current_h as i32;
 
         // Restore if maximized
-        if unsafe { IsZoomed(top_hwnd).as_bool() } {
+        if unsafe { IsZoomed(target_hwnd).as_bool() } {
             debug_log(LogLevel::Info, LogMode::Nested, "resize: Window is maximized, restoring");
-            unsafe { _ = ShowWindow(top_hwnd, SW_RESTORE) };
+            unsafe { _ = ShowWindow(target_hwnd, SW_RESTORE) };
             display_notification(Notification::WindowMaximizedRestored);
             return;
         }
@@ -89,7 +93,7 @@ impl GameWindow {
             return;
         }
 
-        unsafe { _ = SetWindowPos(top_hwnd, None, 0, 0, target_top_w, target_top_h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) };
+        unsafe { _ = SetWindowPos(target_hwnd, None, 0, 0, target_top_w, target_top_h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) };
 
         debug_log(LogLevel::Info, LogMode::Nested, &format!("resize: Adjusted to {}x{}", target_w, target_h));
 
@@ -98,7 +102,7 @@ impl GameWindow {
         display_notification(Notification::WindowAutoResized { prev_w: current_w, prev_h: current_h, target_w, target_h, reason });
     }
 
-    pub fn get_info(&self) -> (i32, i32) {
+    pub fn get_client_size(&self) -> (i32, i32) {
         let mut rect = RECT::default();
         if unsafe { GetClientRect(self.hwnd, &mut rect) }.is_ok() {
             (rect.right - rect.left, rect.bottom - rect.top)
@@ -270,19 +274,6 @@ fn get_window_class(hwnd: HWND) -> Option<String> {
             Some(String::from_utf16_lossy(&buffer[..len as usize]))
         } else {
             None
-        }
-    }
-}
-
-fn get_top_level_parent(mut hwnd: HWND) -> HWND {
-    let mut last_valid_hwnd = hwnd;
-    loop {
-        match unsafe { GetParent(hwnd) } {
-            Ok(parent) if !parent.0.is_null() => {
-                hwnd = parent;
-                last_valid_hwnd = hwnd;
-            }
-            _ => return last_valid_hwnd,
         }
     }
 }

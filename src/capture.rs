@@ -8,7 +8,7 @@ use std::{
 
 use chrono::Local;
 use fast_image_resize::{images::Image, PixelType, ResizeAlg, ResizeOptions, Resizer};
-use image::{codecs::png::PngEncoder, DynamicImage, Rgba, RgbaImage};
+use image::{codecs::png::PngEncoder, Rgba, RgbaImage};
 use win_screenshot::prelude::{capture_window_ex, Area, Using};
 use windows::Win32::UI::HiDpi::{GetWindowDpiAwarenessContext, SetThreadDpiAwarenessContext};
 
@@ -22,7 +22,7 @@ const TCP_TIMEOUT_MS: u64 = 100;
 
 pub fn send_capture(window: &GameWindow) {
     let pixels = capture_resized_pixels(window).unwrap_or_else(black_frame_pixels);
-    let img = DynamicImage::ImageRgba8(RgbaImage::from_raw(DISPLAY_WIDTH, DISPLAY_HEIGHT, pixels).expect("Failed to create RgbaImage"));
+    let img = RgbaImage::from_raw(DISPLAY_WIDTH, DISPLAY_HEIGHT, pixels).expect("Failed to create RgbaImage");
     img.write_with_encoder(PngEncoder::new(&mut stdout().lock()))
         .expect("Failed to encode PNG to stdout");
 }
@@ -34,7 +34,7 @@ pub fn send_capture_nc(window: &GameWindow, port: u16) {
 
 pub fn send_black_frame() {
     let pixels = black_frame_pixels();
-    let img = DynamicImage::ImageRgba8(RgbaImage::from_raw(DISPLAY_WIDTH, DISPLAY_HEIGHT, pixels).expect("Failed to create RgbaImage"));
+    let img = RgbaImage::from_raw(DISPLAY_WIDTH, DISPLAY_HEIGHT, pixels).expect("Failed to create RgbaImage");
     img.write_with_encoder(PngEncoder::new(&mut stdout().lock()))
         .expect("Failed to encode PNG to stdout");
 }
@@ -49,7 +49,7 @@ pub fn screenshot(window: &GameWindow) {
         return;
     };
 
-    let img = DynamicImage::ImageRgba8(RgbaImage::from_raw(DISPLAY_WIDTH, DISPLAY_HEIGHT, pixels).expect("Failed to create RgbaImage"));
+    let img = RgbaImage::from_raw(DISPLAY_WIDTH, DISPLAY_HEIGHT, pixels).expect("Failed to create RgbaImage");
     let filename = format!("Screenshot_{}.png", Local::now().format("%Y.%m.%d_%H.%M.%S.%3f"));
     let filepath = format!("{}/Desktop/{}", env::var("USERPROFILE").unwrap(), filename);
     img.write_with_encoder(PngEncoder::new(File::create(&filepath).unwrap())).unwrap();
@@ -57,8 +57,9 @@ pub fn screenshot(window: &GameWindow) {
     display_notification(Notification::Screenshot);
 }
 
-pub fn debug_capture(window: &GameWindow, x: i32, y: i32, end_point: Option<(i32, i32)>) {
-    if !config().debug_capture {
+pub fn debug_capture(window: &GameWindow, path: &[(i32, i32)]) {
+    Config::reload();
+    if !config().debug_capture || path.is_empty() {
         return;
     }
 
@@ -67,16 +68,17 @@ pub fn debug_capture(window: &GameWindow, x: i32, y: i32, end_point: Option<(i32
     };
     let mut img = RgbaImage::from_raw(DISPLAY_WIDTH, DISPLAY_HEIGHT, pixels).expect("Failed to create RgbaImage");
 
-    let draw_point = |img: &mut RgbaImage, (x, y), color| {
-        draw_filled_circle(img, x, y, 6, Rgba([255, 255, 255, 255]));
-        draw_filled_circle(img, x, y, 5, color);
-    };
+    let last = (path.len() - 1).max(1) as f32;
 
-    draw_point(&mut img, (x, y), Rgba([255, 0, 0, 255]));
-
-    if let Some((x2, y2)) = end_point {
-        draw_line(&mut img, x, y, x2, y2, Rgba([0, 255, 0, 255]));
-        draw_point(&mut img, (x2, y2), Rgba([0, 0, 255, 255]));
+    for (i, &(x, y)) in path.iter().enumerate() {
+        let t = i as f32 / last;
+        let r = (255.0 * (1.0 - t)) as u8;
+        let b = (255.0 * t) as u8;
+        if i == 0 || i == path.len() - 1 {
+            draw_x(&mut img, x, y, Rgba([r, 0, b, 255]));
+        } else {
+            draw_filled_circle(&mut img, x, y, Rgba([r, 0, b, 255]));
+        }
     }
 
     let filename = format!("Debug_{}.png", Local::now().format("%Y.%m.%d_%H.%M.%S.%3f"));
@@ -93,7 +95,7 @@ pub fn debug_capture(window: &GameWindow, x: i32, y: i32, end_point: Option<(i32
 fn capture_resized_pixels(window: &GameWindow) -> Option<Vec<u8>> {
     window.restore();
 
-    let (log_w, log_h) = window.get_info();
+    let (log_w, log_h) = window.get_client_size();
     let hwnd = window.hwnd;
 
     // Handle mixed DPI settings properly in multiple-monitor setups (ex. main 125%, sub 100%)
@@ -101,7 +103,6 @@ fn capture_resized_pixels(window: &GameWindow) -> Option<Vec<u8>> {
 
     let buf = capture_window_ex(hwnd.0 as isize, Using::PrintWindow, Area::ClientOnly, None, None).ok()?;
 
-    // physical size (actual captured pixels)
     let phys_w = buf.width;
     let phys_h = buf.height;
     validate_window_size(window, log_w, log_h, phys_w, phys_h);
@@ -117,7 +118,6 @@ fn capture_resized_pixels(window: &GameWindow) -> Option<Vec<u8>> {
 }
 
 fn validate_window_size(window: &GameWindow, log_w: i32, log_h: i32, phys_w: u32, phys_h: u32) {
-    // Ratio check
     let height_ratio = log_h as f32 / (log_w as f32 / 16.0);
     if (height_ratio - 9.0).abs() > 0.1 {
         display_notification(Notification::WindowWrongRatio(height_ratio));
@@ -176,7 +176,8 @@ fn transmit_pixels_nc(pixels: Vec<u8>, port: u16) {
     let _ = stream.read(&mut dump);
 }
 
-fn draw_filled_circle(img: &mut RgbaImage, cx: i32, cy: i32, radius: i32, color: Rgba<u8>) {
+fn draw_filled_circle(img: &mut RgbaImage, cx: i32, cy: i32, color: Rgba<u8>) {
+    let radius = 1;
     let (w, h) = (img.width() as i32, img.height() as i32);
     for dy in -radius..=radius {
         for dx in -radius..=radius {
@@ -191,29 +192,20 @@ fn draw_filled_circle(img: &mut RgbaImage, cx: i32, cy: i32, radius: i32, color:
     }
 }
 
-fn draw_line(img: &mut RgbaImage, x0: i32, y0: i32, x1: i32, y1: i32, color: Rgba<u8>) {
+fn draw_x(img: &mut RgbaImage, cx: i32, cy: i32, color: Rgba<u8>) {
+    let size = 4;
     let (w, h) = (img.width() as i32, img.height() as i32);
-    let mut x = x0;
-    let mut y = y0;
-    let (dx, dy) = ((x1 - x0).abs(), -(y1 - y0).abs());
-    let (sx, sy) = (if x0 < x1 { 1 } else { -1 }, if y0 < y1 { 1 } else { -1 });
-    let mut err = dx + dy;
-
-    loop {
-        if x >= 0 && x < w && y >= 0 && y < h {
-            img.put_pixel(x as u32, y as u32, color);
-        }
-        if x == x1 && y == y1 {
-            break;
-        }
-        let e2 = 2 * err;
-        if e2 >= dy {
-            err += dy;
-            x += sx;
-        }
-        if e2 <= dx {
-            err += dx;
-            y += sy;
+    for i in -size..=size {
+        for (dx, dy) in [(i, i), (i, -i)] {
+            for ox in -1..=1 {
+                for oy in -1..=1 {
+                    let nx = cx + dx + ox;
+                    let ny = cy + dy + oy;
+                    if nx >= 0 && nx < w && ny >= 0 && ny < h {
+                        img.put_pixel(nx as u32, ny as u32, color);
+                    }
+                }
+            }
         }
     }
 }
