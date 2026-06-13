@@ -132,9 +132,8 @@ impl Notification {
 
     fn cooldown(&self) -> Option<u64> {
         match self {
-            Self::WindowWrongRatio(..) | Self::WindowAutoResized { .. } => Some(10),
-            Self::WindowMinimized |  Self::WindowMaximizedRestored => Some(2),
-            Self::AdbInputUnsupported => Some(24 * 60 * 60), // 24 hours
+            Self::WindowWrongRatio(..) | Self::AdbInputUnsupported=> Some(10),
+            Self::WindowMinimized | Self::WindowAutoResized { .. } | Self::WindowMaximizedRestored => Some(2),
             _ => None,
         }
     }
