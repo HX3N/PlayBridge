@@ -32,7 +32,7 @@ pub enum Notification {
     UpdateAvailable(String),
     UnsupportedClient(String),
     ClientMismatch(String, String),
-    AdbInputDeprecation,
+    AdbInputUnsupported,
 }
 
 impl Notification {
@@ -45,7 +45,7 @@ impl Notification {
             | Self::UnsupportedClient(..)
             | Self::ClientMismatch(..)
             | Self::WindowAutoResized { .. }
-            | Self::AdbInputDeprecation
+            | Self::AdbInputUnsupported
             | Self::WindowMaximizedRestored => LogLevel::Warn,
 
             Self::ScreenshotFailed | Self::UnknownCommand(..) | Self::Panic(..) => LogLevel::Error,
@@ -118,9 +118,9 @@ impl Notification {
                 format!("The requested client does not match the installed version\nPlease check 'Client' in MAA 'Game Settings'\nRequested: {}\nInstalled: {}", r, i),
                 format!("요청된 클라이언트와 설치된 클라이언트가 달라요\nMAA '실행 설정'에서 '클라이언트'를 확인해주세요\n요청됨: {}\n설치됨: {}", r, i),
             ),
-            Self::AdbInputDeprecation => (
-                "Current input method is ADB Input\nWe recommend changing it to Minitouch".into(),
-                "현재 입력 방식이 ADB Input 이에요\nMinitouch로 변경하는걸 권장해요".into(),
+            Self::AdbInputUnsupported => (
+                "ADB Input is no longer supported\nPlease switch to Minitouch".into(),
+                "ADB Input은 지원하지 않습니다\nMinitouch로 전환해주세요".into(),
             ),
         };
         if config().client == Client::KR {
@@ -132,9 +132,9 @@ impl Notification {
 
     fn cooldown(&self) -> Option<u64> {
         match self {
-            Self::WindowWrongRatio(..) => Some(10),
-            Self::WindowMinimized | Self::WindowAutoResized { .. } | Self::WindowMaximizedRestored => Some(2),
-            Self::AdbInputDeprecation => Some(24 * 60 * 60), // 24 hours
+            Self::WindowWrongRatio(..) | Self::WindowAutoResized { .. } => Some(10),
+            Self::WindowMinimized |  Self::WindowMaximizedRestored => Some(2),
+            Self::AdbInputUnsupported => Some(24 * 60 * 60), // 24 hours
             _ => None,
         }
     }

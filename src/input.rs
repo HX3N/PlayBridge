@@ -1,19 +1,24 @@
 use std::{
     io::{self, BufRead},
+    thread,
     time::Duration,
 };
 
 use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
-    UI::WindowsAndMessaging::{PostMessageW, WM_CANCELMODE, WM_CLOSE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE},
+    UI::WindowsAndMessaging::{
+        PostMessageW, WM_CANCELMODE, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+    },
 };
 
 use crate::{
-    capture::debug_capture_path,
+    capture::debug_capture,
     config::{DISPLAY_HEIGHT, DISPLAY_WIDTH},
     logging::{debug_log, LogLevel, LogMode},
     window::{parent_or_self, GameWindow},
 };
+
+const TEXT_INPUT_DELAY_MS: u64 = 50;
 
 pub fn post_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) {
     unsafe { _ = PostMessageW(Some(hwnd), msg, wparam, lparam) };
@@ -32,6 +37,38 @@ pub fn get_relative_point(x: i32, y: i32, w: i32, h: i32) -> isize {
     let nx = (x as f32 / DISPLAY_WIDTH as f32 * w as f32).round() as isize;
     let ny = (y as f32 / DISPLAY_HEIGHT as f32 * h as f32).round() as isize;
     ny << 16 | nx
+}
+
+fn adb_keycode_to_vk(adb_keycode: i32) -> Option<i32> {
+    match adb_keycode {
+        111 => Some(0x1B), // KEYCODE_ESCAPE -> VK_ESCAPE
+        _ => None,
+    }
+}
+
+fn key_down(window: &GameWindow, vk_code: i32) {
+    let lparam = LPARAM((vk_code << 16) as isize);
+    post_message(window.hwnd, WM_KEYDOWN, WPARAM(vk_code as usize), lparam);
+}
+
+fn key_up(window: &GameWindow, vk_code: i32) {
+    let lparam = LPARAM((vk_code << 16 | 1 << 30 | 1 << 31) as isize);
+    post_message(window.hwnd, WM_KEYUP, WPARAM(vk_code as usize), lparam);
+}
+
+pub fn input_keyevent(window: &GameWindow, adb_keycode: i32) {
+    let Some(vk_code) = adb_keycode_to_vk(adb_keycode) else {
+        return;
+    };
+    key_down(window, vk_code);
+    key_up(window, vk_code);
+}
+
+pub fn input_text(window: &GameWindow, text: &str) {
+    for ch in text.chars() {
+        post_message(window.hwnd, WM_CHAR, WPARAM(ch as usize), LPARAM(0));
+        thread::sleep(Duration::from_millis(TEXT_INPUT_DELAY_MS));
+    }
 }
 
 pub fn run_minitouch_daemon() {
@@ -126,7 +163,7 @@ pub fn run_minitouch_daemon() {
                     post_message(window.hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(last_relative_pos));
                     post_message(window.hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(last_relative_pos));
                     is_down = false;
-                    debug_capture_path(&window, &touch_path);
+                    debug_capture(&window, &touch_path);
                     touch_path.clear();
                 }
             }
@@ -154,21 +191,11 @@ pub fn run_minitouch_daemon() {
             "k" => {
                 if parts.len() >= 3 {
                     let keycode: i32 = parts[1].parse().unwrap_or(0);
-                    let action = parts[2];
-
-                    let vk_code = match keycode {
-                        111 => 0x1B, // VK_ESCAPE
-                        _ => 0,
-                    };
-
-                    if vk_code != 0 {
-                        let wparam = WPARAM(vk_code as usize);
-                        if action == "d" {
-                            let lparam = LPARAM((vk_code << 16) as isize);
-                            post_message(window.hwnd, WM_KEYDOWN, wparam, lparam);
-                        } else if action == "u" {
-                            let lparam = LPARAM((vk_code << 16 | 1 << 30 | 1 << 31) as isize);
-                            post_message(window.hwnd, WM_KEYUP, wparam, lparam);
+                    if let Some(vk_code) = adb_keycode_to_vk(keycode) {
+                        match parts[2] {
+                            "d" => key_down(&window, vk_code),
+                            "u" => key_up(&window, vk_code),
+                            _ => {}
                         }
                     }
                 }

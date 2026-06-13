@@ -57,39 +57,7 @@ pub fn screenshot(window: &GameWindow) {
     display_notification(Notification::Screenshot);
 }
 
-pub fn debug_capture(window: &GameWindow, x: i32, y: i32, end_point: Option<(i32, i32)>) {
-    if !config().debug_capture {
-        return;
-    }
-
-    let Some(pixels) = capture_resized_pixels(window) else {
-        return;
-    };
-    let mut img = RgbaImage::from_raw(DISPLAY_WIDTH, DISPLAY_HEIGHT, pixels).expect("Failed to create RgbaImage");
-
-    // Gradient line
-    if let Some((x2, y2)) = end_point {
-        draw_gradient_line(&mut img, x, y, x2, y2);
-    }
-
-    // Foreground points
-    if let Some((x2, y2)) = end_point {
-        draw_x(&mut img, x2, y2, Rgba([0, 0, 255, 255]));
-    }
-    draw_x(&mut img, x, y, Rgba([255, 0, 0, 255]));
-
-    let filename = format!("Debug_{}.png", Local::now().format("%Y.%m.%d_%H.%M.%S.%3f"));
-    let capture_folder = get_debug_folder().join("PlayBridge");
-    let _ = std::fs::create_dir_all(&capture_folder);
-    cleanup_old_captures(&capture_folder);
-
-    let filepath = capture_folder.join(&filename);
-    img.write_with_encoder(PngEncoder::new(File::create(&filepath).unwrap())).unwrap();
-
-    debug_log(LogLevel::Info, LogMode::Nested, &format!("Debug: {}", filepath.display()));
-}
-
-pub fn debug_capture_path(window: &GameWindow, path: &[(i32, i32)]) {
+pub fn debug_capture(window: &GameWindow, path: &[(i32, i32)]) {
     Config::reload();
     if !config().debug_capture || path.is_empty() {
         return;
@@ -102,7 +70,6 @@ pub fn debug_capture_path(window: &GameWindow, path: &[(i32, i32)]) {
 
     let last = (path.len() - 1).max(1) as f32;
 
-    // Foreground points
     for (i, &(x, y)) in path.iter().enumerate() {
         let t = i as f32 / last;
         let r = (255.0 * (1.0 - t)) as u8;
@@ -136,7 +103,6 @@ fn capture_resized_pixels(window: &GameWindow) -> Option<Vec<u8>> {
 
     let buf = capture_window_ex(hwnd.0 as isize, Using::PrintWindow, Area::ClientOnly, None, None).ok()?;
 
-    // physical size (actual captured pixels)
     let phys_w = buf.width;
     let phys_h = buf.height;
     validate_window_size(window, log_w, log_h, phys_w, phys_h);
@@ -152,7 +118,6 @@ fn capture_resized_pixels(window: &GameWindow) -> Option<Vec<u8>> {
 }
 
 fn validate_window_size(window: &GameWindow, log_w: i32, log_h: i32, phys_w: u32, phys_h: u32) {
-    // Ratio check
     let height_ratio = log_h as f32 / (log_w as f32 / 16.0);
     if (height_ratio - 9.0).abs() > 0.1 {
         display_notification(Notification::WindowWrongRatio(height_ratio));
@@ -224,43 +189,6 @@ fn draw_filled_circle(img: &mut RgbaImage, cx: i32, cy: i32, color: Rgba<u8>) {
                 }
             }
         }
-    }
-}
-
-fn draw_gradient_line(img: &mut RgbaImage, x0: i32, y0: i32, x1: i32, y1: i32) {
-    let (w, h) = (img.width() as i32, img.height() as i32);
-    let mut x = x0;
-    let mut y = y0;
-
-    let dx = (x1 - x0).abs();
-    let dy = -(y1 - y0).abs();
-    let sx = if x0 < x1 { 1 } else { -1 };
-    let sy = if y0 < y1 { 1 } else { -1 };
-    let mut err = dx + dy;
-
-    let total_steps = dx.max(-dy) as f32;
-    let mut steps_taken = 0.0;
-
-    loop {
-        if x >= 0 && x < w && y >= 0 && y < h {
-            let t = if total_steps == 0.0 { 0.0 } else { steps_taken / total_steps };
-            let r = (255.0 * (1.0 - t)) as u8;
-            let b = (255.0 * t) as u8;
-            img.put_pixel(x as u32, y as u32, Rgba([r, 0, b, 255]));
-        }
-        if x == x1 && y == y1 {
-            break;
-        }
-        let e2 = 2 * err;
-        if e2 >= dy {
-            err += dy;
-            x += sx;
-        }
-        if e2 <= dx {
-            err += dx;
-            y += sy;
-        }
-        steps_taken += 1.0;
     }
 }
 
