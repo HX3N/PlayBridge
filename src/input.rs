@@ -146,7 +146,7 @@ pub fn run_minitouch_daemon() {
                 if let Some((x, y)) = current_pos {
                     let pos = get_relative_point(x, y, w_width, w_height);
                     if !is_down {
-                        debug_log(LogLevel::Info, LogMode::Event, &format!("Minitouch: DOWN at x={}, y={}", x, y));
+                        debug_log(LogLevel::Info, LogMode::Start, &format!("Minitouch: DOWN at x={}, y={}", x, y));
                         send_cancel_mode(window.hwnd);
                         post_message(window.hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos));
                         post_message(window.hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos));
@@ -159,7 +159,7 @@ pub fn run_minitouch_daemon() {
                     }
                     last_relative_pos = pos;
                 } else if is_down {
-                    debug_log(LogLevel::Info, LogMode::Event, "Minitouch: UP");
+                    debug_log(LogLevel::Info, LogMode::End, "Minitouch: UP");
                     post_message(window.hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(last_relative_pos));
                     post_message(window.hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(last_relative_pos));
                     is_down = false;

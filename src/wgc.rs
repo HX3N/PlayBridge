@@ -308,18 +308,18 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
                     LogLevel::Info,
                     LogMode::Event,
                     &format!(
-                        "WgcDaemon: extras delivered (age {} ms, crop+resize {} ms, ipc_write {} ms, total {} ms)",
+                        "WgcDaemon: extras delivered in {} ms (age {} ms, crop+resize {} ms, ipc_write {} ms)",
+                        t0.elapsed().as_millis(),
                         frame_age.as_millis(),
                         crop_resize.as_millis(),
-                        t1.elapsed().as_millis(),
-                        t0.elapsed().as_millis()
+                        t1.elapsed().as_millis()
                     ),
                 );
             }
             None => {
                 let rgba = black_frame_rgba();
                 write_extras_frame(&mut stream, &rgba);
-                debug_log(LogLevel::Info, LogMode::Event, "WgcDaemon: extras no frame cached, sent black frame");
+                debug_log(LogLevel::Warn, LogMode::Event, "WgcDaemon: extras no frame cached, sent black frame");
             }
         }
         return;
@@ -334,18 +334,18 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
                 LogLevel::Info,
                 LogMode::Nested,
                 &format!(
-                    "WgcDaemon: rawbync delivered (age {} ms, crop+resize {} ms, transmit {} ms, total {} ms)",
+                    "WgcDaemon: rawbync delivered in {} ms (age {} ms, crop+resize {} ms, transmit {} ms)",
+                    t0.elapsed().as_millis(),
                     frame_age.as_millis(),
                     crop_resize.as_millis(),
-                    t1.elapsed().as_millis(),
-                    t0.elapsed().as_millis()
+                    t1.elapsed().as_millis()
                 ),
             );
             1u8
         }
         None => {
             transmit_pixels_nc(black_frame_rgba(), maa_port);
-            debug_log(LogLevel::Info, LogMode::Event, "WgcDaemon: rawbync no frame cached, sent black frame");
+            debug_log(LogLevel::Warn, LogMode::Event, "WgcDaemon: rawbync no frame cached, sent black frame");
             1u8
         }
     };
@@ -421,7 +421,7 @@ pub fn run_daemon() {
             match GameWindow::find() {
                 None => {
                     if cap.is_some() {
-                        debug_log(LogLevel::Info, LogMode::Event, "WgcDaemon: window gone, serving black frames");
+                        debug_log(LogLevel::Warn, LogMode::Event, "WgcDaemon: window gone, serving black frames");
                         cap = None;
                     }
                 }

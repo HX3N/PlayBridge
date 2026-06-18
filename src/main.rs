@@ -194,7 +194,7 @@ fn execute_command(command: Command) {
             } else if let Some(w) = window {
                 capture::send_capture(&w);
             } else {
-                debug_log(LogLevel::Info, LogMode::Nested, "Window: not found, sent black frame (Encode)");
+                debug_log(LogLevel::Warn, LogMode::Nested, "Window: not found, sent black frame (Encode)");
                 capture::send_black_frame();
             }
         }
@@ -213,7 +213,7 @@ fn execute_command(command: Command) {
                     if let Some(w) = window {
                         capture::send_capture_nc(&w, port);
                     } else {
-                        debug_log(LogLevel::Info, LogMode::Nested, "Window: not found, sent black frame (RawByNc)");
+                        debug_log(LogLevel::Warn, LogMode::Nested, "Window: not found, sent black frame (RawByNc)");
                         capture::send_black_frame_nc(port);
                     }
                 }
