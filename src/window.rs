@@ -10,7 +10,7 @@ use windows::Win32::{
     },
 };
 
-use crate::config::{config, set_client, Client};
+use crate::config::{config, set_client, Client, DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use crate::input::send_cancel_mode;
 use crate::logging::{debug_log, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification, ResizeReason};
@@ -80,7 +80,7 @@ impl GameWindow {
 
         // Restore if maximized
         if unsafe { IsZoomed(target_hwnd).as_bool() } {
-            debug_log(LogLevel::Info, LogMode::Nested, "resize: Window is maximized, restoring");
+            debug_log(LogLevel::Info, LogMode::Nested, "Resize: window is maximized, restoring");
             unsafe { _ = ShowWindow(target_hwnd, SW_RESTORE) };
             display_notification(Notification::WindowMaximizedRestored);
             return;
@@ -95,7 +95,7 @@ impl GameWindow {
 
         unsafe { _ = SetWindowPos(target_hwnd, None, 0, 0, target_top_w, target_top_h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) };
 
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("resize: Adjusted to {}x{}", target_w, target_h));
+        debug_log(LogLevel::Info, LogMode::Nested, &format!("Resize: adjusted to {}x{}", target_w, target_h));
 
         let reason = if target_w > current_w { ResizeReason::TooSmall } else { ResizeReason::TooLarge };
 
@@ -110,17 +110,52 @@ impl GameWindow {
             (0, 0)
         }
     }
+
+    /// Notify on wrong aspect ratio, and force-resize when the window is too
+    /// small or too large. `log_*` = logical client size (for the ratio check),
+    /// `phys_*` = physical client size (for the size thresholds).
+    pub(crate) fn validate_and_resize(&self, log_w: i32, log_h: i32, phys_w: u32, phys_h: u32) {
+        let height_ratio = log_h as f32 / (log_w as f32 / 16.0);
+        if (height_ratio - 9.0).abs() > 0.1 {
+            display_notification(Notification::WindowWrongRatio(height_ratio));
+            return;
+        }
+
+        // Force resize if too small
+        if phys_w < (DISPLAY_WIDTH as f32 * 0.9) as u32 || phys_h < (DISPLAY_HEIGHT as f32 * 0.9) as u32 {
+            let (target_w, target_h) = (DISPLAY_WIDTH, DISPLAY_HEIGHT);
+            self.resize(phys_w, phys_h, target_w, target_h);
+            return;
+        }
+
+        // Force resize if too large
+        if phys_w > (DISPLAY_WIDTH as f32 * 1.6) as u32 || phys_h > (DISPLAY_HEIGHT as f32 * 1.6) as u32 {
+            let (target_w, target_h) = ((DISPLAY_WIDTH as f32 * 1.5) as u32, (DISPLAY_HEIGHT as f32 * 1.5) as u32);
+            self.resize(phys_w, phys_h, target_w, target_h);
+        }
+    }
+
+    /// Restore from minimized, then apply the size policy. Daemon is per-monitor
+    /// DPI aware: get_client_size() is physical, but the ratio check is
+    /// scale-invariant so passing it as both logical/physical is fine.
+    pub fn normalize(&self) {
+        self.restore();
+        let (w, h) = self.get_client_size();
+        if w > 0 && h > 0 {
+            self.validate_and_resize(w, h, w as u32, h as u32);
+        }
+    }
 }
 
 pub fn ensure_game_ready() {
     if config().client == Client::Empty {
-        debug_log(LogLevel::Info, LogMode::Nested, "Try detecting package from AppData/Local/Google/Play Games");
+        debug_log(LogLevel::Info, LogMode::Nested, "Package: detecting from AppData/Local/Google/Play Games");
         if let Some(package) = find_installed_package() {
             if let Some(client) = resolve_client(&package) {
                 set_client(client);
             }
         } else {
-            debug_log(LogLevel::Warn, LogMode::Nested, "Package detection failed");
+            debug_log(LogLevel::Warn, LogMode::Nested, "Package: detection failed");
             return;
         }
     }
@@ -218,12 +253,9 @@ fn find_installed_package() -> Option<String> {
 }
 
 fn resolve_client(package: &str) -> Option<Client> {
-    for client in [Client::KR, Client::JP, Client::EN] {
-        if package.starts_with(client.package()) {
-            return Some(client);
-        }
-    }
-    None
+    [Client::KR, Client::JP, Client::EN]
+        .into_iter()
+        .find(|&client| package.starts_with(client.package()))
 }
 
 fn match_window_by_title(windows: &[HwndName], title: &str) -> Option<HWND> {

@@ -104,7 +104,7 @@ pub fn set_client(client: Client) {
     debug_log(
         LogLevel::Info,
         LogMode::Nested,
-        &format!("CLIENT set: {} (title: {}, package: {})", client.as_str(), client.title(), client.package()),
+        &format!("Client: set {} (title: {}, package: {})", client.as_str(), client.title(), client.package()),
     );
     set_registry_value("CLIENT", client.as_str()).unwrap();
     Config::reload();
@@ -112,14 +112,14 @@ pub fn set_client(client: Client) {
 
 pub fn set_benchmark_mode(count: u32) {
     let _ = set_registry_dword("BENCHMARK_COUNT", count, REG_PATH_STATE);
-    debug_log(LogLevel::Info, LogMode::Nested, &format!("Benchmark Mode Set: {}", count));
+    debug_log(LogLevel::Info, LogMode::Nested, &format!("Benchmark: mode set to {}", count));
 }
 
 pub fn check_benchmark_mode() -> bool {
     let count = get_registry_dword("BENCHMARK_COUNT", REG_PATH_STATE).unwrap_or(0);
     if count > 0 {
         let _ = set_registry_dword("BENCHMARK_COUNT", count - 1, REG_PATH_STATE);
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Benchmark Mode Active (Remaining: {} -> {})", count, count - 1));
+        debug_log(LogLevel::Info, LogMode::Nested, &format!("Benchmark: active (remaining {} -> {})", count, count - 1));
         return true;
     }
     false
@@ -140,11 +140,11 @@ pub fn check_version() {
     println!("PlayBridge {}", current_version);
 
     if stored_version == current_version {
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("version: {}", current_version));
+        debug_log(LogLevel::Info, LogMode::Nested, &format!("Version: {}", current_version));
         return;
     }
 
-    debug_log(LogLevel::Info, LogMode::Nested, &format!("version updated: {} -> {}", stored_version, current_version));
+    debug_log(LogLevel::Info, LogMode::Nested, &format!("Version: updated {} -> {}", stored_version, current_version));
     set_registry_value("VERSION", current_version).unwrap();
     Config::reload();
 }
@@ -159,7 +159,7 @@ pub fn check_for_update() {
 
     if is_dev || is_cooldown {
         let reason = if is_dev { "development" } else { "cooldown" };
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Skip update check ({})", reason));
+        debug_log(LogLevel::Info, LogMode::Nested, &format!("Update: skip check ({})", reason));
         return;
     }
 
@@ -172,18 +172,18 @@ pub fn check_for_update() {
     {
         Ok(j) => j,
         Err(e) => {
-            debug_log(LogLevel::Warn, LogMode::Nested, &format!("Update check failed: {}", e));
+            debug_log(LogLevel::Warn, LogMode::Nested, &format!("Update: check failed: {}", e));
             return;
         }
     };
 
     let latest = json["tag_name"].as_str().unwrap_or("");
     if latest == current {
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Up to date: {}", current));
+        debug_log(LogLevel::Info, LogMode::Nested, &format!("Update: up to date ({})", current));
     } else {
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Update available: {} -> {}", current, latest));
+        debug_log(LogLevel::Info, LogMode::Nested, &format!("Update: available {} -> {}", current, latest));
         if let Some(url) = json["html_url"].as_str() {
-            debug_log(LogLevel::Info, LogMode::Nested, &format!("url open: {}", url));
+            debug_log(LogLevel::Info, LogMode::Nested, &format!("URL: opening {}", url));
             let _ = open::that(url);
         }
         display_notification(Notification::UpdateAvailable(latest.to_string()));
@@ -201,6 +201,15 @@ pub fn get_registry_dword(key_name: &str, path: &str) -> std::io::Result<u32> {
 }
 
 pub fn set_registry_dword(key_name: &str, value: u32, path: &str) -> std::io::Result<()> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hkcu.create_subkey(path)?;
+    key.set_value(key_name, &value)?;
+    Ok(())
+}
+
+/// Write a string to an HKCU subkey. Used to publish EXE_PATH so the fake
+/// nemu DLL can locate and spawn the WGC daemon.
+pub fn set_registry_string(key_name: &str, value: &str, path: &str) -> std::io::Result<()> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu.create_subkey(path)?;
     key.set_value(key_name, &value)?;
