@@ -132,7 +132,6 @@ impl GameWindow {
         if phys_w > (DISPLAY_WIDTH as f32 * 1.6) as u32 || phys_h > (DISPLAY_HEIGHT as f32 * 1.6) as u32 {
             let (target_w, target_h) = ((DISPLAY_WIDTH as f32 * 1.5) as u32, (DISPLAY_HEIGHT as f32 * 1.5) as u32);
             self.resize(phys_w, phys_h, target_w, target_h);
-            return;
         }
     }
 
@@ -254,12 +253,9 @@ fn find_installed_package() -> Option<String> {
 }
 
 fn resolve_client(package: &str) -> Option<Client> {
-    for client in [Client::KR, Client::JP, Client::EN] {
-        if package.starts_with(client.package()) {
-            return Some(client);
-        }
-    }
-    None
+    [Client::KR, Client::JP, Client::EN]
+        .into_iter()
+        .find(|&client| package.starts_with(client.package()))
 }
 
 fn match_window_by_title(windows: &[HwndName], title: &str) -> Option<HWND> {

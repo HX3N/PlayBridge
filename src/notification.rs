@@ -56,7 +56,7 @@ impl Notification {
 
     fn tag(&self) -> String {
         let debug_str = format!("{:?}", self);
-        debug_str.split(|c| c == '(' || c == '{').next().unwrap_or(&debug_str).to_string()
+        debug_str.split(['(', '{']).next().unwrap_or(&debug_str).to_string()
     }
 
     fn body(&self) -> String {
@@ -132,7 +132,7 @@ impl Notification {
 
     fn cooldown(&self) -> Option<u64> {
         match self {
-            Self::WindowWrongRatio(..) | Self::AdbInputUnsupported=> Some(10),
+            Self::WindowWrongRatio(..) | Self::AdbInputUnsupported => Some(10),
             Self::WindowMinimized | Self::WindowAutoResized { .. } | Self::WindowMaximizedRestored => Some(2),
             _ => None,
         }

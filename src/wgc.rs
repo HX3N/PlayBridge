@@ -11,27 +11,28 @@ use std::process::Command;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
+type FrameLatest = Arc<Mutex<Option<(Vec<u8>, u32, u32, Instant)>>>;
+
 use windows::core::{IInspectable, Interface, PCWSTR};
 use windows::Foundation::TypedEventHandler;
 use windows::Graphics::Capture::{Direct3D11CaptureFrame, Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession};
 use windows::Graphics::DirectX::Direct3D11::IDirect3DSurface;
 use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, HMODULE, HWND, POINT, RECT};
-use windows::Win32::System::Threading::CreateMutexW;
-use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
-use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
-use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CPU_ACCESS_READ,
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_STAGING,
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
 };
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
+use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
+use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::System::WinRT::Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess};
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
+use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetClientRect, GA_ROOT};
 
 use crate::capture::{resize_to_display, transmit_pixels_nc};
@@ -95,7 +96,11 @@ fn create_item(hwnd: HWND) -> windows::core::Result<GraphicsCaptureItem> {
     unsafe { interop.CreateForWindow(hwnd) }
 }
 
-fn process_frame(device: &ID3D11Device, context: &ID3D11DeviceContext, frame: &Direct3D11CaptureFrame) -> windows::core::Result<(Vec<u8>, u32, u32)> {
+fn process_frame(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    frame: &Direct3D11CaptureFrame,
+) -> windows::core::Result<(Vec<u8>, u32, u32)> {
     let surface: IDirect3DSurface = frame.Surface()?;
     let access: IDirect3DDxgiInterfaceAccess = surface.cast()?;
     let texture: ID3D11Texture2D = unsafe { access.GetInterface()? };
@@ -190,7 +195,7 @@ pub struct WgcCapture {
     _device: ID3D11Device,
     _pool: Direct3D11CaptureFramePool,
     _session: GraphicsCaptureSession,
-    latest: Arc<Mutex<Option<(Vec<u8>, u32, u32, Instant)>>>,
+    latest: FrameLatest,
     top: HWND,
     child: HWND,
     /// Child client size at session creation. The frame pool is fixed to the
@@ -206,7 +211,7 @@ impl WgcCapture {
         let size = item.Size()?;
         let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(&winrt_device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size)?;
 
-        let latest: Arc<Mutex<Option<(Vec<u8>, u32, u32, Instant)>>> = Arc::new(Mutex::new(None));
+        let latest: FrameLatest = Arc::new(Mutex::new(None));
         {
             let latest = latest.clone();
             let device = device.clone();

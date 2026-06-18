@@ -76,7 +76,7 @@ pub fn register_panic_hook() {
     }));
 }
 
-const MAX_LOG_FILE_SIZE: u64 = 1 * 1024 * 1024; // 1MB
+const MAX_LOG_FILE_SIZE: u64 = 1024 * 1024; // 1MB
 const BACKUP_LOG_NAME: &str = "PlayBridge.bak.log";
 
 pub fn rotate_log() {

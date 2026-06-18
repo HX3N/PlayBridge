@@ -73,10 +73,7 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
-            debug_capture: get_reg_value("DEBUG_CAPTURE", 0u32) != 0,
-            client: Client::from_str(&get_reg_value("CLIENT", String::new())),
-        }
+        Self { debug_capture: get_reg_value("DEBUG_CAPTURE", 0u32) != 0, client: Client::from_str(&get_reg_value("CLIENT", String::new())) }
     }
 }
 

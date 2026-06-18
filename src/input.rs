@@ -188,15 +188,13 @@ pub fn run_minitouch_daemon() {
                 touch_path.clear();
             }
             // "k" (KEY EVENT): k <keycode> <action>
-            "k" => {
-                if parts.len() >= 3 {
-                    let keycode: i32 = parts[1].parse().unwrap_or(0);
-                    if let Some(vk_code) = adb_keycode_to_vk(keycode) {
-                        match parts[2] {
-                            "d" => key_down(&window, vk_code),
-                            "u" => key_up(&window, vk_code),
-                            _ => {}
-                        }
+            "k" if parts.len() >= 3 => {
+                let keycode: i32 = parts[1].parse().unwrap_or(0);
+                if let Some(vk_code) = adb_keycode_to_vk(keycode) {
+                    match parts[2] {
+                        "d" => key_down(&window, vk_code),
+                        "u" => key_up(&window, vk_code),
+                        _ => {}
                     }
                 }
             }

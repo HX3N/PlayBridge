@@ -122,7 +122,6 @@ pub fn resize_to_display(pixels: Vec<u8>, w: u32, h: u32) -> Option<Vec<u8>> {
     Some(dst_image.into_vec())
 }
 
-
 fn black_frame_pixels() -> Vec<u8> {
     vec![0u8; (DISPLAY_WIDTH * DISPLAY_HEIGHT * 4) as usize]
 }

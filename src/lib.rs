@@ -143,8 +143,12 @@ pub extern "C" fn nemu_get_display_id(_handle: i32, _pkg: *const u8, _app_index:
 /// Two-call protocol: buffer_size == 0 returns the dimensions; otherwise fills
 /// `pixels` with RGBA. MAA applies `cvtColor(RGBA2BGR)` then `flip(.,0)`, so we
 /// write the frame BOTTOM-UP to cancel that vertical flip.
+///
+/// # Safety
+/// `width` and `height` must be null or valid writable pointers. `pixels` must
+/// be null or point to a buffer of at least `buffer_size` bytes.
 #[no_mangle]
-pub extern "C" fn nemu_capture_display(
+pub unsafe extern "C" fn nemu_capture_display(
     _handle: i32,
     _display_id: u32,
     buffer_size: i32,
