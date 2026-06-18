@@ -131,7 +131,7 @@ pub fn transmit_pixels_nc(pixels: Vec<u8>, port: u16) {
     let mut stream = match TcpStream::connect((LOOPBACK_IP, port)) {
         Ok(s) => s,
         Err(e) => {
-            debug_log(LogLevel::Error, LogMode::Nested, &format!("Socket Connect Failed: {}", e));
+            debug_log(LogLevel::Error, LogMode::Nested, &format!("Socket: connect failed: {}", e));
             return;
         }
     };
@@ -149,7 +149,7 @@ pub fn transmit_pixels_nc(pixels: Vec<u8>, port: u16) {
     }
 
     if let Err(e) = stream.write_all(&buffer) {
-        debug_log(LogLevel::Error, LogMode::Nested, &format!("Socket Send Failed: {}", e));
+        debug_log(LogLevel::Error, LogMode::Nested, &format!("Socket: send failed: {}", e));
         return;
     }
 

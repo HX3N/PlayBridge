@@ -33,6 +33,8 @@ const HEIGHT: u32 = 720;
 // IPC timeouts. The daemon writes ~3.7MB over localhost; give the read room.
 const CONNECT_WRITE_TIMEOUT_MS: u64 = 500;
 const READ_TIMEOUT_MS: u64 = 3000;
+const FRAME_RETRY_COUNT: usize = 3;
+const FRAME_RETRY_DELAY_MS: u64 = 16;
 
 // The DLL writes no logs (kept lightweight); the daemon logs each request.
 
@@ -73,13 +75,6 @@ fn ensure_daemon() {
     if let Some(exe) = reg_read_string(KEY_EXE_PATH) {
         spawn_daemon(&exe);
     }
-    // Poll up to ~3s for the daemon to bind and publish its port.
-    for _ in 0..30 {
-        std::thread::sleep(Duration::from_millis(100));
-        if connect_daemon().is_some() {
-            return;
-        }
-    }
 }
 
 /// Ask the daemon for the latest frame as raw RGBA (1280x720, top-down).
@@ -113,14 +108,14 @@ fn request_frame() -> Option<Vec<u8>> {
 
 /// Request a frame, ensuring the daemon exists and tolerating cold start.
 fn request_frame_with_retry() -> Option<Vec<u8>> {
-    for attempt in 0..10 {
+    for attempt in 0..FRAME_RETRY_COUNT {
         if let Some(frame) = request_frame() {
             return Some(frame);
         }
         if attempt == 0 {
             ensure_daemon();
         }
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(Duration::from_millis(FRAME_RETRY_DELAY_MS));
     }
     None
 }
@@ -174,13 +169,8 @@ pub extern "C" fn nemu_capture_display(
         return 1;
     }
 
-    let frame = match request_frame_with_retry() {
-        Some(f) => f,
-        None => return 1,
-    };
-    if frame.len() < needed {
-        return 1;
-    }
+    let frame = request_frame_with_retry();
+    let frame = frame.as_deref();
 
     let row = (WIDTH * 4) as usize;
     let h = HEIGHT as usize;
@@ -188,7 +178,11 @@ pub extern "C" fn nemu_capture_display(
         for y in 0..h {
             let src = (h - 1 - y) * row; // bottom-up
             let dst = y * row;
-            std::ptr::copy_nonoverlapping(frame.as_ptr().add(src), pixels.add(dst), row);
+            if let Some(frame) = frame.filter(|f| f.len() >= needed) {
+                std::ptr::copy_nonoverlapping(frame.as_ptr().add(src), pixels.add(dst), row);
+            } else {
+                std::ptr::write_bytes(pixels.add(dst), 0, row);
+            }
         }
     }
     // Per-frame success is intentionally silent — the daemon logs the delivery.

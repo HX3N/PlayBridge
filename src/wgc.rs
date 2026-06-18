@@ -49,6 +49,19 @@ const IPC_CONNECT_TIMEOUT_MS: u64 = 500;
 // Client must wait out the full frame delivery before the ack (matches `nc -w 3`).
 const IPC_ACK_TIMEOUT_MS: u64 = 3000;
 
+fn black_frame_rgba() -> Vec<u8> {
+    vec![0u8; (DISPLAY_WIDTH * DISPLAY_HEIGHT * 4) as usize]
+}
+
+fn write_extras_frame(stream: &mut TcpStream, rgba: &[u8]) {
+    let mut header = Vec::with_capacity(9);
+    header.push(1u8);
+    header.extend_from_slice(&DISPLAY_WIDTH.to_le_bytes());
+    header.extend_from_slice(&DISPLAY_HEIGHT.to_le_bytes());
+    let _ = stream.write_all(&header);
+    let _ = stream.write_all(rgba);
+}
+
 fn create_device() -> windows::core::Result<(ID3D11Device, ID3D11DeviceContext)> {
     let mut device: Option<ID3D11Device> = None;
     let mut context: Option<ID3D11DeviceContext> = None;
@@ -177,7 +190,7 @@ pub struct WgcCapture {
     _device: ID3D11Device,
     _pool: Direct3D11CaptureFramePool,
     _session: GraphicsCaptureSession,
-    latest: Arc<Mutex<Option<(Vec<u8>, u32, u32)>>>,
+    latest: Arc<Mutex<Option<(Vec<u8>, u32, u32, Instant)>>>,
     top: HWND,
     child: HWND,
     /// Child client size at session creation. The frame pool is fixed to the
@@ -193,7 +206,7 @@ impl WgcCapture {
         let size = item.Size()?;
         let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(&winrt_device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size)?;
 
-        let latest: Arc<Mutex<Option<(Vec<u8>, u32, u32)>>> = Arc::new(Mutex::new(None));
+        let latest: Arc<Mutex<Option<(Vec<u8>, u32, u32, Instant)>>> = Arc::new(Mutex::new(None));
         {
             let latest = latest.clone();
             let device = device.clone();
@@ -202,7 +215,7 @@ impl WgcCapture {
                 let sender = sender.ok()?;
                 if let Ok(frame) = sender.TryGetNextFrame() {
                     if let Ok((px, w, h)) = process_frame(&device, &context, &frame) {
-                        *latest.lock().unwrap() = Some((px, w, h));
+                        *latest.lock().unwrap() = Some((px, w, h, Instant::now()));
                     }
                     let _ = frame.Close();
                 }
@@ -229,12 +242,13 @@ impl WgcCapture {
     }
 
     /// Latest frame cropped to the CROSVM client area, resized to display, RGBA.
-    pub fn latest_display_rgba(&self) -> Option<Vec<u8>> {
-        let (bgra, fw, fh) = self.latest.lock().unwrap().clone()?;
+    pub fn latest_display_rgba(&self) -> Option<(Vec<u8>, Duration, Duration)> {
+        let t0 = Instant::now();
+        let (bgra, fw, fh, captured_at) = self.latest.lock().unwrap().clone()?;
         let (cropped, cw, ch) = crop_to_child(&bgra, fw, fh, self.top, self.child)?;
         let mut rgba = resize_to_display(cropped, cw, ch)?;
         rgba.chunks_exact_mut(4).for_each(|c| c.swap(0, 2)); // BGRA -> RGBA
-        Some(rgba)
+        Some((rgba, captured_at.elapsed(), t0.elapsed()))
     }
 }
 
@@ -256,20 +270,14 @@ fn daemon_already_running() -> bool {
     }
 }
 
-fn build_capture_waiting() -> Option<WgcCapture> {
-    for _ in 0..50 {
-        if let Some(w) = GameWindow::find() {
-            let top = unsafe { GetAncestor(w.hwnd, GA_ROOT) };
-            if let Ok(cap) = WgcCapture::new(w.hwnd, top) {
-                return Some(cap);
-            }
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    None
+fn build_capture_once() -> Option<WgcCapture> {
+    let w = GameWindow::find()?;
+    w.normalize();
+    let top = unsafe { GetAncestor(w.hwnd, GA_ROOT) };
+    WgcCapture::new(w.hwnd, top).ok()
 }
 
-fn handle_client(mut stream: TcpStream, cap: &WgcCapture) {
+fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     let _ = stream.set_read_timeout(Some(Duration::from_millis(IPC_CONNECT_TIMEOUT_MS)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(IPC_ACK_TIMEOUT_MS)));
 
@@ -277,7 +285,7 @@ fn handle_client(mut stream: TcpStream, cap: &WgcCapture) {
     // and drops a socket). The DLL logs nothing, so record the access here.
     let mut portbuf = [0u8; 2];
     if stream.read_exact(&mut portbuf).is_err() {
-        debug_log(LogLevel::Info, LogMode::Event, "daemon: port access (probe, no request)");
+        debug_log(LogLevel::Info, LogMode::Event, "WgcDaemon: port access (probe, no request)");
         return;
     }
     let maa_port = u16::from_le_bytes(portbuf);
@@ -287,45 +295,53 @@ fn handle_client(mut stream: TcpStream, cap: &WgcCapture) {
     // Response: [status: u8] then, if status==1, [w: u32 LE][h: u32 LE][rgba...].
     if maa_port == 0 {
         let t0 = Instant::now();
-        match cap.latest_display_rgba() {
-            Some(rgba) => {
-                let mut header = Vec::with_capacity(9);
-                header.push(1u8);
-                header.extend_from_slice(&DISPLAY_WIDTH.to_le_bytes());
-                header.extend_from_slice(&DISPLAY_HEIGHT.to_le_bytes());
-                let _ = stream.write_all(&header);
-                let _ = stream.write_all(&rgba);
+        match cap.and_then(|c| c.latest_display_rgba()) {
+            Some((rgba, frame_age, crop_resize)) => {
+                let t1 = Instant::now();
+                write_extras_frame(&mut stream, &rgba);
                 debug_log(
                     LogLevel::Info,
                     LogMode::Event,
-                    &format!("daemon: extras delivered {} bytes ({}ms)", rgba.len(), t0.elapsed().as_millis()),
+                    &format!(
+                        "WgcDaemon: extras delivered (age {} ms, crop+resize {} ms, ipc_write {} ms, total {} ms)",
+                        frame_age.as_millis(),
+                        crop_resize.as_millis(),
+                        t1.elapsed().as_millis(),
+                        t0.elapsed().as_millis()
+                    ),
                 );
             }
             None => {
-                let _ = stream.write_all(&[0u8]);
-                debug_log(LogLevel::Warn, LogMode::Event, "daemon: extras no frame cached yet");
+                let rgba = black_frame_rgba();
+                write_extras_frame(&mut stream, &rgba);
+                debug_log(LogLevel::Info, LogMode::Event, "WgcDaemon: extras no frame cached, sent black frame");
             }
         }
         return;
     }
 
-    debug_log(LogLevel::Info, LogMode::Start, &format!("daemon: rawbync deliver -> :{}", maa_port));
     let t0 = Instant::now();
-    let delivered = match cap.latest_display_rgba() {
-        Some(rgba) => {
+    let delivered = match cap.and_then(|c| c.latest_display_rgba()) {
+        Some((rgba, frame_age, crop_resize)) => {
             let t1 = Instant::now();
             transmit_pixels_nc(rgba, maa_port);
             debug_log(
                 LogLevel::Info,
                 LogMode::Nested,
-                &format!("crop+resize={}ms transmit={}ms", (t1 - t0).as_millis(), t1.elapsed().as_millis()),
+                &format!(
+                    "WgcDaemon: rawbync delivered (age {} ms, crop+resize {} ms, transmit {} ms, total {} ms)",
+                    frame_age.as_millis(),
+                    crop_resize.as_millis(),
+                    t1.elapsed().as_millis(),
+                    t0.elapsed().as_millis()
+                ),
             );
-            debug_log(LogLevel::Info, LogMode::End, &format!("{}ms", t0.elapsed().as_millis()));
             1u8
         }
         None => {
-            debug_log(LogLevel::Warn, LogMode::End, "daemon: rawbync no frame cached yet");
-            0u8
+            transmit_pixels_nc(black_frame_rgba(), maa_port);
+            debug_log(LogLevel::Info, LogMode::Event, "WgcDaemon: rawbync no frame cached, sent black frame");
+            1u8
         }
     };
     let _ = stream.write_all(&[delivered]);
@@ -343,18 +359,10 @@ pub fn run_daemon() {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
     }
 
-    let mut cap = match build_capture_waiting() {
-        Some(c) => c,
-        None => {
-            debug_log(LogLevel::Warn, LogMode::Event, "daemon: window not found, exiting");
-            return;
-        }
-    };
-
     let listener = match TcpListener::bind(("127.0.0.1", 0)) {
         Ok(l) => l,
         Err(e) => {
-            debug_log(LogLevel::Error, LogMode::Event, &format!("daemon: bind failed: {}", e));
+            debug_log(LogLevel::Error, LogMode::Event, &format!("WgcDaemon: bind failed: {}", e));
             return;
         }
     };
@@ -363,7 +371,12 @@ pub fn run_daemon() {
         Err(_) => return,
     };
     let _ = set_registry_dword(DAEMON_PORT_KEY, port as u32, REG_PATH_STATE);
-    debug_log(LogLevel::Info, LogMode::Event, &format!("daemon: listening on 127.0.0.1:{}", port));
+    debug_log(LogLevel::Info, LogMode::End, &format!("WgcDaemon: started / awaiting handshake (127.0.0.1:{})", port));
+
+    let mut cap = build_capture_once();
+    if cap.is_none() {
+        debug_log(LogLevel::Warn, LogMode::Event, "WgcDaemon: window not found yet, serving black frames");
+    }
 
     // Blocking accept on a dedicated thread feeding a channel: zero accept latency.
     let (tx, rx) = mpsc::channel::<TcpStream>();
@@ -385,7 +398,7 @@ pub fn run_daemon() {
     loop {
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(stream) => {
-                handle_client(stream, &cap);
+                handle_client(stream, cap.as_ref());
                 last_active = Instant::now();
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
@@ -401,14 +414,23 @@ pub fn run_daemon() {
         if last_maint.elapsed() >= MAINTENANCE_INTERVAL {
             last_maint = Instant::now();
             match GameWindow::find() {
-                None => break, // window gone
+                None => {
+                    if cap.is_some() {
+                        debug_log(LogLevel::Info, LogMode::Event, "WgcDaemon: window gone, serving black frames");
+                        cap = None;
+                    }
+                }
                 Some(w) => {
                     w.normalize(); // restore from minimized; resize if too small/large/maximized
-                    if w.hwnd != cap.child() || child_client_size(w.hwnd) != cap.bound_client() {
+                    let needs_rebind = cap
+                        .as_ref()
+                        .map(|c| w.hwnd != c.child() || child_client_size(w.hwnd) != c.bound_client())
+                        .unwrap_or(true);
+                    if needs_rebind {
                         let top = unsafe { GetAncestor(w.hwnd, GA_ROOT) };
                         if let Ok(c) = WgcCapture::new(w.hwnd, top) {
-                            debug_log(LogLevel::Info, LogMode::Event, "daemon: rebound (window changed)");
-                            cap = c;
+                            debug_log(LogLevel::Info, LogMode::Event, "WgcDaemon: rebound (window changed)");
+                            cap = Some(c);
                         }
                     }
                 }
@@ -417,7 +439,7 @@ pub fn run_daemon() {
     }
 
     let _ = set_registry_dword(DAEMON_PORT_KEY, 0, REG_PATH_STATE);
-    debug_log(LogLevel::Info, LogMode::Event, "daemon: exit");
+    debug_log(LogLevel::Info, LogMode::Event, "WgcDaemon: exit by idle");
 }
 
 /// Spawn the daemon detached if it is not already running.

@@ -72,7 +72,7 @@ pub fn input_text(window: &GameWindow, text: &str) {
 }
 
 pub fn run_minitouch_daemon() {
-    debug_log(LogLevel::Info, LogMode::End, "Minitouch Daemon Started / Awaiting Handshake");
+    debug_log(LogLevel::Info, LogMode::End, "Minitouch: started / awaiting handshake");
 
     println!("v 1");
     println!("^ 10 {} {} 100", DISPLAY_WIDTH, DISPLAY_HEIGHT);

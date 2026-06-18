@@ -80,7 +80,7 @@ impl GameWindow {
 
         // Restore if maximized
         if unsafe { IsZoomed(target_hwnd).as_bool() } {
-            debug_log(LogLevel::Info, LogMode::Nested, "resize: Window is maximized, restoring");
+            debug_log(LogLevel::Info, LogMode::Nested, "Resize: window is maximized, restoring");
             unsafe { _ = ShowWindow(target_hwnd, SW_RESTORE) };
             display_notification(Notification::WindowMaximizedRestored);
             return;
@@ -95,7 +95,7 @@ impl GameWindow {
 
         unsafe { _ = SetWindowPos(target_hwnd, None, 0, 0, target_top_w, target_top_h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) };
 
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("resize: Adjusted to {}x{}", target_w, target_h));
+        debug_log(LogLevel::Info, LogMode::Nested, &format!("Resize: adjusted to {}x{}", target_w, target_h));
 
         let reason = if target_w > current_w { ResizeReason::TooSmall } else { ResizeReason::TooLarge };
 
@@ -136,10 +136,9 @@ impl GameWindow {
         }
     }
 
-    /// Restore from minimized, then apply the size policy. The daemon is
-    /// per-monitor DPI aware, so `get_client_size()` returns physical pixels;
-    /// the aspect-ratio check is scale-invariant, so passing them as both
-    /// logical and physical is fine.
+    /// Restore from minimized, then apply the size policy. Daemon is per-monitor
+    /// DPI aware: get_client_size() is physical, but the ratio check is
+    /// scale-invariant so passing it as both logical/physical is fine.
     pub fn normalize(&self) {
         self.restore();
         let (w, h) = self.get_client_size();
@@ -151,13 +150,13 @@ impl GameWindow {
 
 pub fn ensure_game_ready() {
     if config().client == Client::Empty {
-        debug_log(LogLevel::Info, LogMode::Nested, "Try detecting package from AppData/Local/Google/Play Games");
+        debug_log(LogLevel::Info, LogMode::Nested, "Package: detecting from AppData/Local/Google/Play Games");
         if let Some(package) = find_installed_package() {
             if let Some(client) = resolve_client(&package) {
                 set_client(client);
             }
         } else {
-            debug_log(LogLevel::Warn, LogMode::Nested, "Package detection failed");
+            debug_log(LogLevel::Warn, LogMode::Nested, "Package: detection failed");
             return;
         }
     }

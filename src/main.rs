@@ -28,8 +28,7 @@ fn main() {
 
     debug_log(LogLevel::Info, LogMode::Start, &full_joined);
 
-    // Publish our own path so the fake nemu DLL (running inside MAA) can find
-    // PlayBridgeADB.exe to spawn the WGC daemon on demand.
+    // Publish exe path so the fake nemu DLL can spawn the WGC daemon.
     if let Ok(exe) = env::current_exe() {
         let _ = config::set_registry_string("EXE_PATH", &exe.to_string_lossy(), config::REG_PATH_STATE);
     }
@@ -158,7 +157,7 @@ fn execute_command(command: Command) {
             if let Some(w) = window {
                 input::terminate(&w);
             } else {
-                debug_log(LogLevel::Warn, LogMode::Nested, "ForceStop: Window not found");
+                debug_log(LogLevel::Warn, LogMode::Nested, "ForceStop: window not found");
             }
             display_notification(Notification::GpgShutdown);
         }
@@ -190,32 +189,31 @@ fn execute_command(command: Command) {
         Command::Screencap => {
             if check_benchmark_mode() {
                 thread::sleep(Duration::from_millis(BENCHMARK_DELAY_MS));
-                debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: Sent Black Frame (Encode)");
+                debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: sent black frame (Encode)");
                 capture::send_black_frame();
             } else if let Some(w) = window {
                 capture::send_capture(&w);
             } else {
-                debug_log(LogLevel::Info, LogMode::Nested, "Window not found: Sent Black Frame (Encode)");
+                debug_log(LogLevel::Info, LogMode::Nested, "Window: not found, sent black frame (Encode)");
                 capture::send_black_frame();
             }
         }
         Command::ScreencapNc { port } => {
             if check_benchmark_mode() {
-                debug_log(LogLevel::Info, LogMode::Nested, &format!("RawByNc: Connecting to 127.0.0.1:{}", port));
-                debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: Sent Black Frame (RawByNc)");
+                debug_log(LogLevel::Info, LogMode::Nested, &format!("RawByNc: connecting to 127.0.0.1:{}", port));
+                debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: sent black frame (RawByNc)");
                 capture::send_black_frame_nc(port);
             } else {
-                // WGC daemon delivery is the default path; PrintWindow is only the
-                // fallback when the daemon is unavailable.
+                // WGC daemon is the default; PrintWindow is the fallback.
                 if wgc::deliver_via_daemon(port) {
-                    debug_log(LogLevel::Info, LogMode::Nested, "RawByNc: Delivered via WGC daemon");
+                    debug_log(LogLevel::Info, LogMode::Nested, "RawByNc: delivered via WGC daemon");
                 } else {
-                    debug_log(LogLevel::Info, LogMode::Nested, "RawByNc: Daemon unavailable, spawning + PrintWindow fallback");
+                    debug_log(LogLevel::Info, LogMode::Nested, "RawByNc: daemon unavailable, spawning + PrintWindow fallback");
                     wgc::ensure_daemon();
                     if let Some(w) = window {
                         capture::send_capture_nc(&w, port);
                     } else {
-                        debug_log(LogLevel::Info, LogMode::Nested, "Window not found: Sent Black Frame (RawByNc)");
+                        debug_log(LogLevel::Info, LogMode::Nested, "Window: not found, sent black frame (RawByNc)");
                         capture::send_black_frame_nc(port);
                     }
                 }
@@ -236,14 +234,14 @@ fn execute_command(command: Command) {
             if let Some(w) = window {
                 input::input_keyevent(&w, keycode);
             } else {
-                debug_log(LogLevel::Warn, LogMode::Nested, "KeyEvent: Window not found");
+                debug_log(LogLevel::Warn, LogMode::Nested, "KeyEvent: window not found");
             }
         }
         Command::Text { text } => {
             if let Some(w) = window {
                 input::input_text(&w, &text);
             } else {
-                debug_log(LogLevel::Warn, LogMode::Nested, "Text: Window not found");
+                debug_log(LogLevel::Warn, LogMode::Nested, "Text: window not found");
             }
         }
 
