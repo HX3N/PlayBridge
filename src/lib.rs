@@ -85,12 +85,6 @@ fn request_frame() -> Option<Vec<u8>> {
     // port == 0 selects the daemon's byte-return verb (see wgc.rs handle_client).
     stream.write_all(&0u16.to_le_bytes()).ok()?;
 
-    let mut status = [0u8; 1];
-    stream.read_exact(&mut status).ok()?;
-    if status[0] != 1 {
-        return None; // no frame cached yet (cold start)
-    }
-
     let mut wh = [0u8; 8];
     stream.read_exact(&mut wh).ok()?;
     let w = u32::from_le_bytes(wh[0..4].try_into().ok()?);
@@ -105,7 +99,7 @@ fn request_frame() -> Option<Vec<u8>> {
     Some(buf)
 }
 
-/// Request a frame, ensuring the daemon exists and tolerating cold start.
+/// Request a frame, ensuring the daemon exists and tolerating connection failure.
 fn request_frame_with_retry() -> Option<Vec<u8>> {
     for attempt in 0..FRAME_RETRY_COUNT {
         if let Some(frame) = request_frame() {

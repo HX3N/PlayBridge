@@ -53,8 +53,7 @@ fn black_frame_rgba() -> Vec<u8> {
 }
 
 fn write_extras_frame(stream: &mut TcpStream, rgba: &[u8]) {
-    let mut header = Vec::with_capacity(9);
-    header.push(1u8);
+    let mut header = Vec::with_capacity(8);
     header.extend_from_slice(&DISPLAY_WIDTH.to_le_bytes());
     header.extend_from_slice(&DISPLAY_HEIGHT.to_le_bytes());
     let _ = stream.write_all(&header);
