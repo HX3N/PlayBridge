@@ -49,6 +49,8 @@ jobs:
           name: v${{ steps.version_tag.outputs.VERSION }}
           files: |
             target/release/PlayBridgeADB.exe
+            target/release/external_renderer_ipc.dll
+            Install.bat
 
           draft: false
           prerelease: false
