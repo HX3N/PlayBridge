@@ -10,6 +10,7 @@ env:
 
 jobs:
   build_and_release:
+    if: contains(github.event.head_commit.message, '[release]') || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
 
     steps:
@@ -50,6 +51,7 @@ jobs:
             target/release/external_renderer_ipc.dll
             Install.bat
 
+          generate_release_notes: true
           draft: false
           prerelease: false
         env:
