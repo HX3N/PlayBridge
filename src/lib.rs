@@ -13,10 +13,14 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::os::windows::process::CommandExt;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Duration;
 
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
+
+// Guards FreeLibrary from racing live captures.
+static INFLIGHT: AtomicI32 = AtomicI32::new(0);
 
 // Must match src/config.rs (REG_PATH_STATE) and src/wgc.rs (DAEMON_PORT_KEY)
 // and the EXE_PATH key written by src/main.rs.
@@ -125,7 +129,10 @@ pub extern "C" fn nemu_connect(_path: *const u16, _index: i32) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn nemu_disconnect(_handle: i32) {
-    // The daemon manages its own lifecycle (self-exits after idle); nothing to do.
+    // Drain in-flight captures before returning so FreeLibrary doesn't race live code.
+    while INFLIGHT.load(Ordering::Acquire) > 0 {
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
 
 #[no_mangle]
@@ -149,10 +156,10 @@ pub unsafe extern "C" fn nemu_capture_display(
     pixels: *mut u8,
 ) -> i32 {
     if !width.is_null() {
-        unsafe { *width = WIDTH as i32 };
+        *width = WIDTH as i32;
     }
     if !height.is_null() {
-        unsafe { *height = HEIGHT as i32 };
+        *height = HEIGHT as i32;
     }
 
     // Size query.
@@ -165,22 +172,22 @@ pub unsafe extern "C" fn nemu_capture_display(
         return 1;
     }
 
+    INFLIGHT.fetch_add(1, Ordering::AcqRel);
     let frame = request_frame_with_retry();
     let frame = frame.as_deref();
 
     let row = (WIDTH * 4) as usize;
     let h = HEIGHT as usize;
-    unsafe {
-        for y in 0..h {
-            let src = (h - 1 - y) * row; // bottom-up
-            let dst = y * row;
-            if let Some(frame) = frame.filter(|f| f.len() >= needed) {
-                std::ptr::copy_nonoverlapping(frame.as_ptr().add(src), pixels.add(dst), row);
-            } else {
-                std::ptr::write_bytes(pixels.add(dst), 0, row);
-            }
+    for y in 0..h {
+        let src = (h - 1 - y) * row; // bottom-up
+        let dst = y * row;
+        if let Some(frame) = frame.filter(|f| f.len() >= needed) {
+            std::ptr::copy_nonoverlapping(frame.as_ptr().add(src), pixels.add(dst), row);
+        } else {
+            std::ptr::write_bytes(pixels.add(dst), 0, row);
         }
     }
+    INFLIGHT.fetch_sub(1, Ordering::AcqRel);
     // Per-frame success is intentionally silent — the daemon logs the delivery.
     0
 }

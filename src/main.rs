@@ -1,4 +1,4 @@
-use std::{env, thread, time::Duration, time::Instant};
+use std::{env, time::Instant};
 
 mod capture;
 mod config;
@@ -13,8 +13,6 @@ use crate::config::{peek_benchmark_mode, set_benchmark_mode};
 use crate::logging::{debug_log, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification};
 use crate::window::{apply_intent_package, ensure_game_ready, print_window_list, start_game_if_needed, GameWindow};
-
-const BENCHMARK_DELAY_MS: u64 = 50;
 
 fn main() {
     let start = Instant::now();
@@ -188,7 +186,6 @@ fn execute_command(command: Command) {
 
         Command::Screencap => {
             if check_benchmark_mode() {
-                thread::sleep(Duration::from_millis(BENCHMARK_DELAY_MS));
                 debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: sent black frame (Encode)");
                 capture::send_black_frame();
             } else if let Some(w) = window {
