@@ -7,7 +7,7 @@ use std::{
 use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
     UI::WindowsAndMessaging::{
-        PostMessageW, WM_CANCELMODE, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+        IsWindow, PostMessageW, WM_CANCELMODE, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
     },
 };
 
@@ -69,6 +69,24 @@ pub fn input_text(window: &GameWindow, text: &str) {
         post_message(window.hwnd, WM_CHAR, WPARAM(ch as usize), LPARAM(0));
         thread::sleep(Duration::from_millis(TEXT_INPUT_DELAY_MS));
     }
+}
+
+// Skip the full GameWindow::find() (window_list enumeration) while the cached handle is valid;
+// just refresh its client size. Re-enumerate only if it's gone.
+fn refresh_window(window: GameWindow, w_width: &mut i32, w_height: &mut i32) -> GameWindow {
+    if unsafe { IsWindow(Some(window.hwnd)).as_bool() } {
+        let (w, h) = window.get_client_size();
+        *w_width = w;
+        *w_height = h;
+        return window;
+    }
+    if let Some(new_win) = GameWindow::find() {
+        let (w, h) = new_win.get_client_size();
+        *w_width = w;
+        *w_height = h;
+        return new_win;
+    }
+    window
 }
 
 pub fn run_minitouch_daemon() {
@@ -135,13 +153,7 @@ pub fn run_minitouch_daemon() {
             }
             // "c" (COMMIT): c
             "c" => {
-                // Re-evaluate window handle and size on every commit
-                if let Some(new_win) = GameWindow::find() {
-                    window = new_win;
-                    let (new_w, new_h) = window.get_client_size();
-                    w_width = new_w;
-                    w_height = new_h;
-                }
+                window = refresh_window(window, &mut w_width, &mut w_height);
 
                 if let Some((x, y)) = current_pos {
                     let pos = get_relative_point(x, y, w_width, w_height);
@@ -171,13 +183,7 @@ pub fn run_minitouch_daemon() {
             "r" => {
                 debug_log(LogLevel::Info, LogMode::Event, "Minitouch: RESET");
 
-                // Re-evaluate window handle and size on reset
-                if let Some(new_win) = GameWindow::find() {
-                    window = new_win;
-                    let (new_w, new_h) = window.get_client_size();
-                    w_width = new_w;
-                    w_height = new_h;
-                }
+                window = refresh_window(window, &mut w_width, &mut w_height);
 
                 if is_down {
                     post_message(window.hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(last_relative_pos));

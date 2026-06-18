@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     env,
     fs::File,
     io::{stdout, Read, Write},
@@ -110,14 +111,19 @@ fn capture_resized_pixels(window: &GameWindow) -> Option<Vec<u8>> {
     resize_to_display(buf.pixels, phys_w, phys_h)
 }
 
+// Reused so fast_image_resize keeps its scratch buffers instead of reallocating per resize.
+// resize_to_display only runs on one thread per process.
+thread_local! {
+    static RESIZER: RefCell<Resizer> = RefCell::new(Resizer::new());
+}
+
 // Lanczos3 downscale to the MAA display size. Single source of truth for resize quality.
 pub fn resize_to_display(pixels: Vec<u8>, w: u32, h: u32) -> Option<Vec<u8>> {
     let src_image = Image::from_vec_u8(w, h, pixels, PixelType::U8x4).ok()?;
     let mut dst_image = Image::new(DISPLAY_WIDTH, DISPLAY_HEIGHT, PixelType::U8x4);
 
-    let mut resizer = Resizer::new();
     let options = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(fast_image_resize::FilterType::Lanczos3));
-    resizer.resize(&src_image, &mut dst_image, &options).ok()?;
+    RESIZER.with(|r| r.borrow_mut().resize(&src_image, &mut dst_image, &options)).ok()?;
 
     Some(dst_image.into_vec())
 }

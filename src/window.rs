@@ -111,9 +111,8 @@ impl GameWindow {
         }
     }
 
-    /// Notify on wrong aspect ratio, and force-resize when the window is too
-    /// small or too large. `log_*` = logical client size (for the ratio check),
-    /// `phys_*` = physical client size (for the size thresholds).
+    /// Notify on wrong aspect ratio, and force-resize when the window is too small or too large.
+    /// `log_*` = logical client size (for the ratio check), `phys_*` = physical client size (for the size thresholds).
     pub(crate) fn validate_and_resize(&self, log_w: i32, log_h: i32, phys_w: u32, phys_h: u32) {
         let height_ratio = log_h as f32 / (log_w as f32 / 16.0);
         if (height_ratio - 9.0).abs() > 0.1 {
@@ -135,9 +134,9 @@ impl GameWindow {
         }
     }
 
-    /// Restore from minimized, then apply the size policy. Daemon is per-monitor
-    /// DPI aware: get_client_size() is physical, but the ratio check is
-    /// scale-invariant so passing it as both logical/physical is fine.
+    /// Restore from minimized, then apply the size policy.
+    /// Daemon is per-monitor DPI aware: get_client_size() is physical,
+    /// but the ratio check is scale-invariant so passing it as both logical/physical is fine.
     pub fn normalize(&self) {
         self.restore();
         let (w, h) = self.get_client_size();

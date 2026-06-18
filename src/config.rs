@@ -207,8 +207,8 @@ pub fn set_registry_dword(key_name: &str, value: u32, path: &str) -> std::io::Re
     Ok(())
 }
 
-/// Write a string to an HKCU subkey. Used to publish EXE_PATH so the fake
-/// nemu DLL can locate and spawn the WGC daemon.
+/// Write a string to an HKCU subkey.
+/// Used to publish EXE_PATH so the fake nemu DLL can locate and spawn the WGC daemon.
 pub fn set_registry_string(key_name: &str, value: &str, path: &str) -> std::io::Result<()> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu.create_subkey(path)?;

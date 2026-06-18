@@ -1,8 +1,6 @@
-// Windows Graphics Capture screencap: a persistent daemon plus thin per-call
-// clients. The daemon holds a warm WGC session on the top-level GPG window,
-// caches the latest frame, and crops/resizes on demand. WGC captures occluded
-// windows continuously on the GPU, so a frame is always ready (~7ms) — no
-// synchronous PrintWindow readback.
+// Windows Graphics Capture screencap: a persistent daemon plus thin per-call clients.
+// The daemon holds a warm WGC session on the top-level GPG window, caches the latest frame, and crops/resizes on demand.
+// WGC captures occluded windows continuously on the GPU, so a frame is always ready (~7ms) — no synchronous PrintWindow readback.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -33,7 +31,7 @@ use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::System::WinRT::Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess};
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
-use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetClientRect, GA_ROOT};
+use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetClientRect, IsWindow, GA_ROOT};
 
 use crate::capture::{resize_to_display, transmit_pixels_nc};
 use crate::config::{get_registry_dword, set_registry_dword, DISPLAY_HEIGHT, DISPLAY_WIDTH, REG_PATH_STATE};
@@ -96,18 +94,15 @@ fn create_item(hwnd: HWND) -> windows::core::Result<GraphicsCaptureItem> {
     unsafe { interop.CreateForWindow(hwnd) }
 }
 
-fn process_frame(
-    device: &ID3D11Device,
-    context: &ID3D11DeviceContext,
-    frame: &Direct3D11CaptureFrame,
-) -> windows::core::Result<(Vec<u8>, u32, u32)> {
-    let surface: IDirect3DSurface = frame.Surface()?;
-    let access: IDirect3DDxgiInterfaceAccess = surface.cast()?;
-    let texture: ID3D11Texture2D = unsafe { access.GetInterface()? };
+// Reused across FrameArrived callbacks: staging texture + output buffer.
+// Avoids a driver allocation and an ~8MB heap alloc on every captured frame.
+#[derive(Default)]
+struct FrameWork {
+    staging: Option<ID3D11Texture2D>,
+    scratch: Vec<u8>,
+}
 
-    let mut desc = D3D11_TEXTURE2D_DESC::default();
-    unsafe { texture.GetDesc(&mut desc) };
-
+fn create_staging(device: &ID3D11Device, desc: &D3D11_TEXTURE2D_DESC) -> windows::core::Result<ID3D11Texture2D> {
     let staging_desc = D3D11_TEXTURE2D_DESC {
         Width: desc.Width,
         Height: desc.Height,
@@ -120,35 +115,71 @@ fn process_frame(
         CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
         MiscFlags: 0,
     };
-
     let mut staging: Option<ID3D11Texture2D> = None;
     unsafe { device.CreateTexture2D(&staging_desc, None, Some(&mut staging))? };
-    let staging = staging.unwrap();
+    Ok(staging.unwrap())
+}
 
-    unsafe { context.CopyResource(&staging, &texture) };
+// Copy the captured frame into `out` (BGRA, top-down), reusing the staging texture and refilling `out` in place.
+// Returns the frame's (width, height).
+fn process_frame(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    staging_cache: &mut Option<ID3D11Texture2D>,
+    out: &mut Vec<u8>,
+    frame: &Direct3D11CaptureFrame,
+) -> windows::core::Result<(u32, u32)> {
+    let surface: IDirect3DSurface = frame.Surface()?;
+    let access: IDirect3DDxgiInterfaceAccess = surface.cast()?;
+    let texture: ID3D11Texture2D = unsafe { access.GetInterface()? };
+
+    let mut desc = D3D11_TEXTURE2D_DESC::default();
+    unsafe { texture.GetDesc(&mut desc) };
+
+    // Reuse the staging texture unless size/format changed (constant per session).
+    let recreate = match staging_cache {
+        Some(s) => {
+            let mut sd = D3D11_TEXTURE2D_DESC::default();
+            unsafe { s.GetDesc(&mut sd) };
+            sd.Width != desc.Width || sd.Height != desc.Height || sd.Format != desc.Format
+        }
+        None => true,
+    };
+    if recreate {
+        *staging_cache = Some(create_staging(device, &desc)?);
+    }
+    let staging = staging_cache.as_ref().unwrap();
+
+    unsafe { context.CopyResource(staging, &texture) };
 
     let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-    unsafe { context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))? };
+    unsafe { context.Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))? };
 
     let w = desc.Width as usize;
     let h = desc.Height as usize;
     let pitch = mapped.RowPitch as usize;
     let src = mapped.pData as *const u8;
-    let mut out = vec![0u8; w * h * 4];
-    for y in 0..h {
-        unsafe {
-            std::ptr::copy_nonoverlapping(src.add(y * pitch), out.as_mut_ptr().add(y * w * 4), w * 4);
+    let needed = w * h * 4;
+
+    // Refill without zero-init: rows below write all `needed` bytes, so set_len is sound.
+    out.clear();
+    out.reserve(needed);
+    unsafe {
+        let dst = out.as_mut_ptr();
+        for y in 0..h {
+            std::ptr::copy_nonoverlapping(src.add(y * pitch), dst.add(y * w * 4), w * 4);
         }
+        out.set_len(needed);
     }
 
-    unsafe { context.Unmap(&staging, 0) };
+    unsafe { context.Unmap(staging, 0) };
 
-    Ok((out, desc.Width, desc.Height))
+    Ok((desc.Width, desc.Height))
 }
 
-// Crop a full top-level frame to the CROSVM child's client area, relative to
-// the top-level's DWM extended frame bounds (the origin WGC captures from).
-fn crop_to_child(frame: &[u8], fw: u32, fh: u32, top: HWND, child: HWND) -> Option<(Vec<u8>, u32, u32)> {
+// Crop geometry for the CROSVM child within the top-level's DWM frame bounds.
+// Pure Win32 queries (no frame buffer), so it can run outside the frame lock.
+fn crop_geometry(top: HWND, child: HWND) -> Option<(i32, i32, i32, i32)> {
     let mut bounds = RECT::default();
     unsafe {
         DwmGetWindowAttribute(
@@ -172,9 +203,13 @@ fn crop_to_child(frame: &[u8], fw: u32, fh: u32, top: HWND, child: HWND) -> Opti
 
     let cx = (tl.x - bounds.left).max(0);
     let cy = (tl.y - bounds.top).max(0);
+    Some((cx, cy, cw, ch))
+}
+
+// Copy only the crop region out of the full frame, clamped to frame size.
+fn crop_region(frame: &[u8], fw: u32, fh: u32, cx: i32, cy: i32, cw: i32, ch: i32) -> Option<(Vec<u8>, u32, u32)> {
     let cw = cw.min(fw as i32 - cx);
     let ch = ch.min(fh as i32 - cy);
-
     if cw <= 0 || ch <= 0 {
         return None;
     }
@@ -189,8 +224,8 @@ fn crop_to_child(frame: &[u8], fw: u32, fh: u32, top: HWND, child: HWND) -> Opti
     Some((out, cw, ch))
 }
 
-/// Warm WGC session bound to the top-level GPG window. FrameArrived caches the
-/// latest full top-level BGRA frame; cropping/resize happen lazily per request.
+/// Warm WGC session bound to the top-level GPG window.
+/// FrameArrived caches the latest full top-level BGRA frame; cropping/resize happen lazily per request.
 pub struct WgcCapture {
     _device: ID3D11Device,
     _pool: Direct3D11CaptureFramePool,
@@ -198,8 +233,8 @@ pub struct WgcCapture {
     latest: FrameLatest,
     top: HWND,
     child: HWND,
-    /// Child client size at session creation. The frame pool is fixed to the
-    /// window size, so a later resize (same hwnd) needs a rebind to match.
+    /// Child client size at session creation.
+    /// The frame pool is fixed to the window size, so a later resize (same hwnd) needs a rebind to match.
     bound_client: (i32, i32),
 }
 
@@ -216,11 +251,17 @@ impl WgcCapture {
             let latest = latest.clone();
             let device = device.clone();
             let context = context.clone();
+            let work = Arc::new(Mutex::new(FrameWork::default()));
             let handler = TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(move |sender, _| {
                 let sender = sender.ok()?;
                 if let Ok(frame) = sender.TryGetNextFrame() {
-                    if let Ok((px, w, h)) = process_frame(&device, &context, &frame) {
-                        *latest.lock().unwrap() = Some((px, w, h, Instant::now()));
+                    let mut work = work.lock().unwrap();
+                    let FrameWork { staging, scratch } = &mut *work;
+                    if let Ok((w, h)) = process_frame(&device, &context, staging, scratch, &frame) {
+                        // Swap the filled buffer into `latest`, reclaim the old one to reuse.
+                        let filled = std::mem::take(scratch);
+                        let prev = latest.lock().unwrap().replace((filled, w, h, Instant::now()));
+                        *scratch = prev.map(|(buf, ..)| buf).unwrap_or_default();
                     }
                     let _ = frame.Close();
                 }
@@ -249,8 +290,18 @@ impl WgcCapture {
     /// Latest frame cropped to the CROSVM client area, resized to display, RGBA.
     pub fn latest_display_rgba(&self) -> Option<(Vec<u8>, Duration, Duration)> {
         let t0 = Instant::now();
-        let (bgra, fw, fh, captured_at) = self.latest.lock().unwrap().clone()?;
-        let (cropped, cw, ch) = crop_to_child(&bgra, fw, fh, self.top, self.child)?;
+
+        // Geometry needs no frame buffer — compute before locking.
+        let (cx, cy, cw0, ch0) = crop_geometry(self.top, self.child)?;
+
+        // Hold the lock only to copy the crop region (not the whole frame).
+        let (cropped, cw, ch, captured_at) = {
+            let guard = self.latest.lock().unwrap();
+            let (bgra, fw, fh, captured_at) = guard.as_ref()?;
+            let (cropped, cw, ch) = crop_region(bgra, *fw, *fh, cx, cy, cw0, ch0)?;
+            (cropped, cw, ch, *captured_at)
+        };
+
         let mut rgba = resize_to_display(cropped, cw, ch)?;
         rgba.chunks_exact_mut(4).for_each(|c| c.swap(0, 2)); // BGRA -> RGBA
         Some((rgba, captured_at.elapsed(), t0.elapsed()))
@@ -286,8 +337,8 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     let _ = stream.set_read_timeout(Some(Duration::from_millis(IPC_CONNECT_TIMEOUT_MS)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(IPC_ACK_TIMEOUT_MS)));
 
-    // No port bytes = a reachability probe (the nemu DLL's ensure_daemon opens
-    // and drops a socket). The DLL logs nothing, so record the access here.
+    // No port bytes = a reachability probe (the nemu DLL's ensure_daemon opens and drops a socket).
+    // The DLL logs nothing, so record the access here.
     let mut portbuf = [0u8; 2];
     if stream.read_exact(&mut portbuf).is_err() {
         debug_log(LogLevel::Info, LogMode::Event, "WgcDaemon: port access (probe, no request)");
@@ -295,8 +346,8 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     }
     let maa_port = u16::from_le_bytes(portbuf);
 
-    // port == 0 is the byte-return verb (fake nemu DLL): hand the raw RGBA frame
-    // back to the caller instead of streaming to MAA's nc port.
+    // port == 0 is the byte-return verb (fake nemu DLL):
+    // hand the raw RGBA frame back to the caller instead of streaming to MAA's nc port.
     // Response: [status: u8] then, if status==1, [w: u32 LE][h: u32 LE][rgba...].
     if maa_port == 0 {
         let t0 = Instant::now();
@@ -352,8 +403,8 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     let _ = stream.write_all(&[delivered]);
 }
 
-/// Long-lived daemon process (`--wgc-daemon`). Single instance; serves the
-/// latest frame to thin clients and self-exits when idle or the window is gone.
+/// Long-lived daemon process (`--wgc-daemon`).
+/// Single instance; serves the latest frame to thin clients and self-exits when idle or the window is gone.
 pub fn run_daemon() {
     if daemon_already_running() {
         return;
@@ -414,11 +465,19 @@ pub fn run_daemon() {
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
 
-        // Window maintenance — must live outside the recv branch so it still
-        // runs while a busy MAA keeps recv_timeout returning Ok.
+        // Window maintenance — must live outside the recv branch
+        // so it still runs while a busy MAA keeps recv_timeout returning Ok.
         if last_maint.elapsed() >= MAINTENANCE_INTERVAL {
             last_maint = Instant::now();
-            match GameWindow::find() {
+
+            // Skip the full GameWindow::find() while the bound window is alive;
+            // reuse the cached handle (normalize/rebind checks still run below).
+            let w = match cap.as_ref() {
+                Some(c) if unsafe { IsWindow(Some(c.child())).as_bool() } => Some(GameWindow { hwnd: c.child() }),
+                _ => GameWindow::find(),
+            };
+
+            match w {
                 None => {
                     if cap.is_some() {
                         debug_log(LogLevel::Warn, LogMode::Event, "WgcDaemon: window gone, serving black frames");

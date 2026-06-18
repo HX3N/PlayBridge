@@ -1,15 +1,14 @@
 // Fake `external_renderer_ipc.dll` — a nemu-ABI shim.
 //
-// MAA's MumuExtras path LoadLibrary's a vendor DLL and calls `nemu_*` in-process
-// to grab the emulator framebuffer. GPG has no such DLL, so we provide one: it
-// exports the nemu ABI but fetches frames from PlayBridge's WGC daemon.
+// MAA's MumuExtras path LoadLibrary's a vendor DLL and calls `nemu_*` in-process to grab the emulator framebuffer.
+// GPG has no such DLL, so we provide one: it exports the nemu ABI but fetches frames from PlayBridge's WGC daemon.
 //
 // Deploy: rename the built DLL to
 //   <fakemumu>/nx_device/15.0/shell/sdk/external_renderer_ipc.dll
 // and point MAA's "MuMu emulator path" at <fakemumu>.
 //
-// Release uses `panic = "abort"`, so a panic here takes down MAA. Every export
-// must be panic-free; turn all errors into nemu error codes (return > 0).
+// Release uses `panic = "abort"`, so a panic here takes down MAA.
+// Every export must be panic-free; turn all errors into nemu error codes (return > 0).
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -25,8 +24,8 @@ const REG_STATE: &str = r"Software\PlayBridge\state";
 const KEY_DAEMON_PORT: &str = "WGC_DAEMON_PORT";
 const KEY_EXE_PATH: &str = "EXE_PATH";
 
-// Must match src/config.rs DISPLAY_WIDTH / DISPLAY_HEIGHT (the daemon resizes to
-// this, and MAA's reported `wm size` matches it so click coords line up).
+// Must match src/config.rs DISPLAY_WIDTH / DISPLAY_HEIGHT (the daemon resizes to this,
+// and MAA's reported `wm size` matches it so click coords line up).
 const WIDTH: u32 = 1280;
 const HEIGHT: u32 = 720;
 
@@ -122,8 +121,8 @@ fn request_frame_with_retry() -> Option<Vec<u8>> {
 
 // nemu ABI exports. Return convention: 0 = success, > 0 = failure.
 
-/// Ignores path/index (the daemon finds the GPG window). Always returns a fixed
-/// non-zero handle; if the daemon can't start, capture fails and MAA falls back.
+/// Ignores path/index (the daemon finds the GPG window).
+/// Always returns a fixed non-zero handle; if the daemon can't start, capture fails and MAA falls back.
 #[no_mangle]
 pub extern "C" fn nemu_connect(_path: *const u16, _index: i32) -> i32 {
     ensure_daemon();
@@ -140,13 +139,12 @@ pub extern "C" fn nemu_get_display_id(_handle: i32, _pkg: *const u8, _app_index:
     0
 }
 
-/// Two-call protocol: buffer_size == 0 returns the dimensions; otherwise fills
-/// `pixels` with RGBA. MAA applies `cvtColor(RGBA2BGR)` then `flip(.,0)`, so we
-/// write the frame BOTTOM-UP to cancel that vertical flip.
+/// Two-call protocol: buffer_size == 0 returns the dimensions; otherwise fills `pixels` with RGBA.
+/// MAA applies `cvtColor(RGBA2BGR)` then `flip(.,0)`, so we write the frame BOTTOM-UP to cancel that vertical flip.
 ///
 /// # Safety
-/// `width` and `height` must be null or valid writable pointers. `pixels` must
-/// be null or point to a buffer of at least `buffer_size` bytes.
+/// `width` and `height` must be null or valid writable pointers.
+/// `pixels` must be null or point to a buffer of at least `buffer_size` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn nemu_capture_display(
     _handle: i32,
@@ -193,8 +191,8 @@ pub unsafe extern "C" fn nemu_capture_display(
     0
 }
 
-// Input exports: required symbols for DLL load, but input goes through the
-// minitouch/Win32 path — MumuExtras is only used for screencap. Stubbed.
+// Input exports: required symbols for DLL load, but input goes through the minitouch/Win32 path.
+// MumuExtras is only used for screencap. Stubbed.
 #[no_mangle]
 pub extern "C" fn nemu_input_text(_handle: i32, _size: i32, _buf: *const u8) -> i32 {
     0
