@@ -105,9 +105,14 @@ fn capture_resized_pixels(window: &GameWindow) -> Option<Vec<u8>> {
 
     let phys_w = buf.width;
     let phys_h = buf.height;
-    validate_window_size(window, log_w, log_h, phys_w, phys_h);
+    window.validate_and_resize(log_w, log_h, phys_w, phys_h);
 
-    let src_image = Image::from_vec_u8(phys_w, phys_h, buf.pixels, PixelType::U8x4).ok()?;
+    resize_to_display(buf.pixels, phys_w, phys_h)
+}
+
+// Lanczos3 downscale to the MAA display size. Single source of truth for resize quality.
+pub fn resize_to_display(pixels: Vec<u8>, w: u32, h: u32) -> Option<Vec<u8>> {
+    let src_image = Image::from_vec_u8(w, h, pixels, PixelType::U8x4).ok()?;
     let mut dst_image = Image::new(DISPLAY_WIDTH, DISPLAY_HEIGHT, PixelType::U8x4);
 
     let mut resizer = Resizer::new();
@@ -117,33 +122,12 @@ fn capture_resized_pixels(window: &GameWindow) -> Option<Vec<u8>> {
     Some(dst_image.into_vec())
 }
 
-fn validate_window_size(window: &GameWindow, log_w: i32, log_h: i32, phys_w: u32, phys_h: u32) {
-    let height_ratio = log_h as f32 / (log_w as f32 / 16.0);
-    if (height_ratio - 9.0).abs() > 0.1 {
-        display_notification(Notification::WindowWrongRatio(height_ratio));
-        return;
-    }
-
-    // Force resize if too small
-    if phys_w < (DISPLAY_WIDTH as f32 * 0.9) as u32 || phys_h < (DISPLAY_HEIGHT as f32 * 0.9) as u32 {
-        let (target_w, target_h) = (DISPLAY_WIDTH, DISPLAY_HEIGHT);
-        window.resize(phys_w, phys_h, target_w, target_h);
-        return;
-    }
-
-    // Force resize if too large
-    if phys_w > (DISPLAY_WIDTH as f32 * 1.6) as u32 || phys_h > (DISPLAY_HEIGHT as f32 * 1.6) as u32 {
-        let (target_w, target_h) = ((DISPLAY_WIDTH as f32 * 1.5) as u32, (DISPLAY_HEIGHT as f32 * 1.5) as u32);
-        window.resize(phys_w, phys_h, target_w, target_h);
-        return;
-    }
-}
 
 fn black_frame_pixels() -> Vec<u8> {
     vec![0u8; (DISPLAY_WIDTH * DISPLAY_HEIGHT * 4) as usize]
 }
 
-fn transmit_pixels_nc(pixels: Vec<u8>, port: u16) {
+pub fn transmit_pixels_nc(pixels: Vec<u8>, port: u16) {
     let mut stream = match TcpStream::connect((LOOPBACK_IP, port)) {
         Ok(s) => s,
         Err(e) => {

@@ -5,6 +5,7 @@ mod config;
 mod input;
 mod logging;
 mod notification;
+mod wgc;
 mod window;
 
 use crate::config::{check_benchmark_mode, check_for_update, check_version, toggle_debug, DISPLAY_HEIGHT, DISPLAY_WIDTH};
@@ -26,6 +27,17 @@ fn main() {
     let args: Vec<String> = raw_args[1..].iter().flat_map(|s| s.split_whitespace()).map(String::from).collect();
 
     debug_log(LogLevel::Info, LogMode::Start, &full_joined);
+
+    // Publish our own path so the fake nemu DLL (running inside MAA) can find
+    // PlayBridgeADB.exe to spawn the WGC daemon on demand.
+    if let Ok(exe) = env::current_exe() {
+        let _ = config::set_registry_string("EXE_PATH", &exe.to_string_lossy(), config::REG_PATH_STATE);
+    }
+
+    if args.iter().any(|a| a == "--wgc-daemon") {
+        wgc::run_daemon();
+        return;
+    }
 
     if !peek_benchmark_mode() {
         ensure_game_ready();
@@ -192,11 +204,21 @@ fn execute_command(command: Command) {
                 debug_log(LogLevel::Info, LogMode::Nested, &format!("RawByNc: Connecting to 127.0.0.1:{}", port));
                 debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: Sent Black Frame (RawByNc)");
                 capture::send_black_frame_nc(port);
-            } else if let Some(w) = window {
-                capture::send_capture_nc(&w, port);
             } else {
-                debug_log(LogLevel::Info, LogMode::Nested, "Window not found: Sent Black Frame (RawByNc)");
-                capture::send_black_frame_nc(port);
+                // WGC daemon delivery is the default path; PrintWindow is only the
+                // fallback when the daemon is unavailable.
+                if wgc::deliver_via_daemon(port) {
+                    debug_log(LogLevel::Info, LogMode::Nested, "RawByNc: Delivered via WGC daemon");
+                } else {
+                    debug_log(LogLevel::Info, LogMode::Nested, "RawByNc: Daemon unavailable, spawning + PrintWindow fallback");
+                    wgc::ensure_daemon();
+                    if let Some(w) = window {
+                        capture::send_capture_nc(&w, port);
+                    } else {
+                        debug_log(LogLevel::Info, LogMode::Nested, "Window not found: Sent Black Frame (RawByNc)");
+                        capture::send_black_frame_nc(port);
+                    }
+                }
             }
         }
 

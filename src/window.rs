@@ -10,7 +10,7 @@ use windows::Win32::{
     },
 };
 
-use crate::config::{config, set_client, Client};
+use crate::config::{config, set_client, Client, DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use crate::input::send_cancel_mode;
 use crate::logging::{debug_log, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification, ResizeReason};
@@ -108,6 +108,43 @@ impl GameWindow {
             (rect.right - rect.left, rect.bottom - rect.top)
         } else {
             (0, 0)
+        }
+    }
+
+    /// Notify on wrong aspect ratio, and force-resize when the window is too
+    /// small or too large. `log_*` = logical client size (for the ratio check),
+    /// `phys_*` = physical client size (for the size thresholds).
+    pub(crate) fn validate_and_resize(&self, log_w: i32, log_h: i32, phys_w: u32, phys_h: u32) {
+        let height_ratio = log_h as f32 / (log_w as f32 / 16.0);
+        if (height_ratio - 9.0).abs() > 0.1 {
+            display_notification(Notification::WindowWrongRatio(height_ratio));
+            return;
+        }
+
+        // Force resize if too small
+        if phys_w < (DISPLAY_WIDTH as f32 * 0.9) as u32 || phys_h < (DISPLAY_HEIGHT as f32 * 0.9) as u32 {
+            let (target_w, target_h) = (DISPLAY_WIDTH, DISPLAY_HEIGHT);
+            self.resize(phys_w, phys_h, target_w, target_h);
+            return;
+        }
+
+        // Force resize if too large
+        if phys_w > (DISPLAY_WIDTH as f32 * 1.6) as u32 || phys_h > (DISPLAY_HEIGHT as f32 * 1.6) as u32 {
+            let (target_w, target_h) = ((DISPLAY_WIDTH as f32 * 1.5) as u32, (DISPLAY_HEIGHT as f32 * 1.5) as u32);
+            self.resize(phys_w, phys_h, target_w, target_h);
+            return;
+        }
+    }
+
+    /// Restore from minimized, then apply the size policy. The daemon is
+    /// per-monitor DPI aware, so `get_client_size()` returns physical pixels;
+    /// the aspect-ratio check is scale-invariant, so passing them as both
+    /// logical and physical is fine.
+    pub fn normalize(&self) {
+        self.restore();
+        let (w, h) = self.get_client_size();
+        if w > 0 && h > 0 {
+            self.validate_and_resize(w, h, w as u32, h as u32);
         }
     }
 }

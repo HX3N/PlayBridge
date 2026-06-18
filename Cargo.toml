@@ -3,6 +3,13 @@ name = "PlayBridgeADB"
 version = "0.1.0"
 edition = "2021"
 
+# The bin (src/main.rs) is the fake-adb shim. The cdylib (src/lib.rs) is the
+# fake nemu `external_renderer_ipc.dll` that MAA loads in-process for the
+# MumuExtras-style fast screencap path. Both ship together.
+[lib]
+name = "external_renderer_ipc"
+crate-type = ["cdylib"]
+
 [dependencies]
 chrono = "0.4"
 image = { version = "0.25", default-features = false, features = ["png"] }
@@ -11,8 +18,24 @@ spin_sleep = "1"
 win-screenshot = "4"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
+    "Foundation",
+    "Graphics",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
 ] }
 winreg = "0.55"
 winrt-toast = "0.1"

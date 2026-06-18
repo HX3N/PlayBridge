@@ -73,7 +73,10 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { debug_capture: get_reg_value("DEBUG_CAPTURE", 0u32) != 0, client: Client::from_str(&get_reg_value("CLIENT", String::new())) }
+        Self {
+            debug_capture: get_reg_value("DEBUG_CAPTURE", 0u32) != 0,
+            client: Client::from_str(&get_reg_value("CLIENT", String::new())),
+        }
     }
 }
 
@@ -201,6 +204,16 @@ pub fn get_registry_dword(key_name: &str, path: &str) -> std::io::Result<u32> {
 }
 
 pub fn set_registry_dword(key_name: &str, value: u32, path: &str) -> std::io::Result<()> {
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hkcu.create_subkey(path)?;
+    key.set_value(key_name, &value)?;
+    Ok(())
+}
+
+/// Write a string to an arbitrary HKCU subkey path. Used to publish the exe's
+/// own path to `state\EXE_PATH` so the fake nemu DLL (loaded inside MAA) can
+/// locate PlayBridgeADB.exe to spawn the WGC daemon.
+pub fn set_registry_string(key_name: &str, value: &str, path: &str) -> std::io::Result<()> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu.create_subkey(path)?;
     key.set_value(key_name, &value)?;
