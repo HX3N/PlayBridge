@@ -13,14 +13,12 @@
 > To check for any issues, use the **`Peep`** feature in MAA's Toolbox tab.<br>
 > Recommended to enable `Login` feature on the first launch.
 
-**PlayExtras** is the default capture path — a faster screencap built on **Windows Graphics Capture (WGC)**, averaging **5–20 ms**.
-
 1. Download **[`Install.bat`](https://github.com/HX3N/PlayBridge/releases/latest)** and run it from your MAA folder. It downloads the latest `PlayBridgeADB.exe` and `external_renderer_ipc.dll` and places them automatically (creating `PlayExtras\nx_device\15.0\shell\sdk\` for the DLL).
 2. Then, go to **MAA > Settings > Connection** and configure as follows:
 
 <div align="center">
 
-![img](./assets/PlayExtras2.png)
+![img](./assets/PlayExtras.png)
 
 | ADB path          | Connection address | Connection Preset | Touch Mode | MuMu Installation Path | Screenshot enhancement mode |
 | ----------------- | ------------------ | ----------------- | ---------- | ---------------------- | --------------------------- |
@@ -35,14 +33,10 @@ PlayExtras impersonates MAA's **MumuExtras** flow: MAA loads a vendor `external_
 
 </details>
 
-## Screenshot
+## Standalone usage
 
-Running the executable directly captures a screenshot of **Google Play Games** and saves it to the Desktop
-
-## Debug Capture
-
-Run `.\PlayBridgeADB --debug` in the directory where the executable is located to toggle debug mode<br>
-You can also modify the registry value directly at `Software\PlayBridge\config\DEBUG_CAPTURE`
+Running `PlayBridgeADB` directly captures a screenshot of **Google Play Games** and saves it to the Desktop.<br>
+Add `--debug` to toggle debug mode (or edit the registry value at `Software\PlayBridge\config\DEBUG_CAPTURE`).
 
 ## RawByNc (legacy)
 
@@ -53,7 +47,7 @@ Download [PlayBridgeADB](https://github.com/HX3N/PlayBridge/releases/latest) and
 
 <div align="center">
 
-![img](./assets/RawByNc2.png)
+![img](./assets/RawByNc.png)
 
 | ADB path      | Connection address | Connection Preset | Touch Mode |
 | ------------- | ------------------ | ----------------- | ---------- |

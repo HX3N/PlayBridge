@@ -13,14 +13,12 @@
 > 문제가 있을 경우 MAA의 도구 탭에서 **`Peep`** 기능을 사용해 확인하세요.<br>
 > 첫 실행 시 `로그인` 기능을 활성화하는 것을 권장합니다.
 
-**PlayExtras**가 기본 캡처 방식입니다 — **Windows Graphics Capture (WGC)** 기반의 빠른 스크린샷 기능으로, 평균 **5~20ms**.
-
 1. **[`Install.bat`](https://github.com/HX3N/PlayBridge/releases/latest)** 을 다운로드하여 MAA 폴더에서 실행하세요. 최신 `PlayBridgeADB.exe`와 `external_renderer_ipc.dll`을 자동으로 다운로드하고 배치합니다 (DLL을 위해 `PlayExtras\nx_device\15.0\shell\sdk\` 폴더를 생성합니다).
 2. **MAA > 설정 > 연결**로 이동하여 아래와 같이 설정하세요:
 
 <div align="center">
 
-![img](./assets/PlayExtras2.png)
+![img](./assets/PlayExtras.png)
 
 | ADB 경로          | 연결 주소       | 연결 프리셋     | 터치 모드 | MuMu 설치 경로 | 스크린샷 향상 모드 |
 | ----------------- | --------------- | --------------- | --------- | -------------- | ------------------ |
@@ -35,14 +33,10 @@ PlayExtras는 MAA의 **MumuExtras** 흐름을 모방합니다. MAA가 벤더 `ex
 
 </details>
 
-## 스크린샷
+## 단독 실행
 
-실행 파일을 직접 실행하면 **Google Play Games**의 스크린샷을 캡처하여 바탕화면에 저장합니다.
-
-## 디버그 캡처
-
-실행 파일이 있는 디렉터리에서 `.\PlayBridgeADB --debug`를 실행하면 디버그 모드를 토글할 수 있습니다.<br>
-또는 레지스트리 값 `Software\PlayBridge\config\DEBUG_CAPTURE`를 직접 수정해도 됩니다.
+`PlayBridgeADB`를 직접 실행하면 **Google Play Games**의 스크린샷을 캡처하여 바탕화면에 저장합니다.<br>
+`--debug`를 붙이면 디버그 모드를 토글할 수 있습니다 (또는 레지스트리 값 `Software\PlayBridge\config\DEBUG_CAPTURE`를 직접 수정).
 
 ## RawByNc (레거시)
 
@@ -53,7 +47,7 @@ PlayExtras는 MAA의 **MumuExtras** 흐름을 모방합니다. MAA가 벤더 `ex
 
 <div align="center">
 
-![img](./assets/RawByNc2.png)
+![img](./assets/RawByNc.png)
 
 | ADB 경로      | 연결 주소       | 연결 프리셋 | 터치 모드 |
 | ------------- | --------------- | ----------- | --------- |
