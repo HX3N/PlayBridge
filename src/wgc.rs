@@ -22,7 +22,10 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
     D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
 };
-use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
+use windows::Win32::Graphics::Dwm::{
+    DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT,
+    DWMWCP_DONOTROUND, DWM_WINDOW_CORNER_PREFERENCE,
+};
 use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Graphics::Gdi::ClientToScreen;
@@ -206,22 +209,85 @@ fn crop_geometry(top: HWND, child: HWND) -> Option<(i32, i32, i32, i32)> {
     Some((cx, cy, cw, ch))
 }
 
-// Copy only the crop region out of the full frame, clamped to frame size.
-fn crop_region(frame: &[u8], fw: u32, fh: u32, cx: i32, cy: i32, cw: i32, ch: i32) -> Option<(Vec<u8>, u32, u32)> {
-    let cw = cw.min(fw as i32 - cx);
-    let ch = ch.min(fh as i32 - cy);
-    if cw <= 0 || ch <= 0 {
+// Fill strategy for the padded edge.
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+enum EdgeFill {
+    Black,
+    Replicate,
+}
+
+// Resizing softens the edge regardless, so replicating the last opaque pixel is the cleanest fill.
+const EDGE_FILL: EdgeFill = EdgeFill::Replicate;
+
+// DWM skips the right/bottom ~3px, so that edge arrives transparent and unrecoverable.
+// A buffer clamped to the captured size resizes at the wrong scale and pushes the UI bottom-right, so it stays full cw x ch.
+// The alpha walk marks the opaque region and `fill` covers the transparent rest.
+fn crop_region(frame: &[u8], fw: u32, fh: u32, rect: (i32, i32, i32, i32), fill: EdgeFill) -> Option<(Vec<u8>, u32, u32)> {
+    let (cx, cy, cw, ch) = rect;
+    if cw <= 0 || ch <= 0 || cx < 0 || cy < 0 {
+        return None;
+    }
+    let (cw, ch) = (cw as u32, ch as u32);
+    let avail_w = (fw as i32 - cx).clamp(0, cw as i32) as u32;
+    let avail_h = (fh as i32 - cy).clamp(0, ch as i32) as u32;
+    if avail_w == 0 || avail_h == 0 {
         return None;
     }
 
-    let (cw, ch) = (cw as u32, ch as u32);
+    let copy = (avail_w * 4) as usize;
     let mut out = vec![0u8; (cw * ch * 4) as usize];
+    for y in 0..avail_h {
+        let s = (((cy as u32 + y) * fw + cx as u32) * 4) as usize;
+        let d = (y * cw * 4) as usize;
+        out[d..d + copy].copy_from_slice(&frame[s..s + copy]);
+    }
+
+    // Find the opaque right/bottom extent by walking inward while alpha < 255.
+    let alpha = |x: u32, y: u32| out[((y * cw + x) * 4 + 3) as usize];
+    let mut ox = avail_w;
+    while ox > 0 && alpha(ox - 1, avail_h / 2) < 255 {
+        ox -= 1;
+    }
+    let mut oy = avail_h;
+    while oy > 0 && alpha(avail_w / 2, oy - 1) < 255 {
+        oy -= 1;
+    }
+    if ox == 0 || oy == 0 {
+        return Some((out, cw, ch)); // degenerate; leave as copied
+    }
+
     for y in 0..ch {
-        let src_off = (((cy as u32 + y) * fw + cx as u32) * 4) as usize;
-        let dst_off = (y * cw * 4) as usize;
-        out[dst_off..dst_off + (cw * 4) as usize].copy_from_slice(&frame[src_off..src_off + (cw * 4) as usize]);
+        for x in 0..cw {
+            if x < ox && y < oy {
+                continue; // keep opaque content
+            }
+            let d = ((y * cw + x) * 4) as usize;
+            match fill {
+                EdgeFill::Black => out[d..d + 4].copy_from_slice(&[0, 0, 0, 255]),
+                EdgeFill::Replicate => {
+                    let s = ((y.min(oy - 1) * cw + x.min(ox - 1)) * 4) as usize;
+                    let p = [out[s], out[s + 1], out[s + 2], out[s + 3]];
+                    out[d..d + 4].copy_from_slice(&p);
+                }
+            }
+        }
     }
     Some((out, cw, ch))
+}
+
+// Win11 rounded corners can appear as transparent pixels in WGC near the crop edge.
+// Square the window while capturing; square=false restores the default.
+fn set_window_corners(top: HWND, square: bool) {
+    let pref: DWM_WINDOW_CORNER_PREFERENCE = if square { DWMWCP_DONOTROUND } else { DWMWCP_DEFAULT };
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            top,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &pref as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<DWM_WINDOW_CORNER_PREFERENCE>() as u32,
+        );
+    }
 }
 
 /// Warm WGC session bound to the top-level GPG window.
@@ -275,6 +341,9 @@ impl WgcCapture {
         let _ = session.SetIsBorderRequired(false);
         session.StartCapture()?;
 
+        // Square the window so the crop's bottom-right isn't eaten by the rounded-corner transparency.
+        set_window_corners(top, true);
+
         let bound_client = child_client_size(child);
         Ok(Self { _device: device, _pool: pool, _session: session, latest, top, child, bound_client })
     }
@@ -298,7 +367,7 @@ impl WgcCapture {
         let (cropped, cw, ch, captured_at) = {
             let guard = self.latest.lock().unwrap();
             let (bgra, fw, fh, captured_at) = guard.as_ref()?;
-            let (cropped, cw, ch) = crop_region(bgra, *fw, *fh, cx, cy, cw0, ch0)?;
+            let (cropped, cw, ch) = crop_region(bgra, *fw, *fh, (cx, cy, cw0, ch0), EDGE_FILL)?;
             (cropped, cw, ch, *captured_at)
         };
 
@@ -500,6 +569,13 @@ pub fn run_daemon() {
                     }
                 }
             }
+        }
+    }
+
+    // Restore the window's default corner rounding we squared off while capturing.
+    if let Some(c) = cap.as_ref() {
+        if unsafe { IsWindow(Some(c.top)).as_bool() } {
+            set_window_corners(c.top, false);
         }
     }
 

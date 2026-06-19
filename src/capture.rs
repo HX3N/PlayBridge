@@ -102,6 +102,9 @@ fn capture_resized_pixels(window: &GameWindow) -> Option<Vec<u8>> {
     // Handle mixed DPI settings properly in multiple-monitor setups (ex. main 125%, sub 100%)
     unsafe { _ = SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(hwnd)) };
 
+    // DWM skips the same right/bottom ~3px as WGC (see crop_region in wgc.rs).
+    // PrintWindow writes that edge as black in a full-size buffer, so the scale holds and only a thin black edge remains.
+    // Fallback path, left as-is.
     let buf = capture_window_ex(hwnd.0 as isize, Using::PrintWindow, Area::ClientOnly, None, None).ok()?;
 
     let phys_w = buf.width;
