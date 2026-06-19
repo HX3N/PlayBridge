@@ -15,6 +15,7 @@ use crate::{
     capture::debug_capture,
     config::{DISPLAY_HEIGHT, DISPLAY_WIDTH},
     logging::{debug_log, LogLevel, LogMode},
+    notification::{display_notification, Notification},
     window::{parent_or_self, GameWindow},
 };
 
@@ -90,6 +91,7 @@ fn refresh_window(window: GameWindow, w_width: &mut i32, w_height: &mut i32) -> 
 }
 
 pub fn run_minitouch_daemon() {
+    display_notification(Notification::MinitouchStarted);
     debug_log(LogLevel::Info, LogMode::End, "Minitouch: started / awaiting handshake");
 
     println!("v 1");
@@ -207,4 +209,7 @@ pub fn run_minitouch_daemon() {
             _ => {}
         }
     }
+
+    display_notification(Notification::MinitouchStopped);
+    debug_log(LogLevel::Info, LogMode::End, "Minitouch: stopped");
 }

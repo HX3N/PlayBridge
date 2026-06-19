@@ -36,6 +36,12 @@ fn main() {
         return;
     }
 
+    // shell /data/local/tmp/<uuid> -i
+    if args.iter().any(|a| a == "-i") {
+        input::run_minitouch_daemon();
+        return;
+    }
+
     if !peek_benchmark_mode() {
         ensure_game_ready();
     }
@@ -69,7 +75,6 @@ enum Command {
     // [Minitouch]
     GetPropAbilist,
     DumpsysInputOrientation,
-    MinitouchDaemon,
 
     // [Key & Text Input]
     KeyEvent { keycode: i32 },
@@ -106,7 +111,6 @@ fn parse_command(args: &[String]) -> Command {
 
         c if c.contains("ro.product.cpu.abilist") => Command::GetPropAbilist,
         c if c.contains("dumpsys input") && c.contains("SurfaceOrientation") => Command::DumpsysInputOrientation,
-        c if c.contains("/data/local/tmp/") && c.contains("-i") => Command::MinitouchDaemon,
 
         c if c.contains("input tap") || c.contains("input swipe") => Command::AdbInputUnsupported,
         c if c.contains("input keyevent") => Command::KeyEvent { keycode: args[5].parse().unwrap_or(0) },
@@ -223,10 +227,6 @@ fn execute_command(command: Command) {
         Command::DumpsysInputOrientation => {
             println!("0");
         }
-        Command::MinitouchDaemon => {
-            input::run_minitouch_daemon();
-        }
-
         Command::KeyEvent { keycode } => {
             if let Some(w) = window {
                 input::input_keyevent(&w, keycode);

@@ -36,11 +36,12 @@ use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetClientRect, IsWind
 use crate::capture::{resize_to_display, transmit_pixels_nc};
 use crate::config::{get_registry_dword, set_registry_dword, DISPLAY_HEIGHT, DISPLAY_WIDTH, REG_PATH_STATE};
 use crate::logging::{debug_log, LogLevel, LogMode};
+use crate::notification::{display_notification, Notification};
 use crate::window::GameWindow;
 
 const DAEMON_MUTEX: &str = "Local\\PlayBridgeWgcDaemon";
 const DAEMON_PORT_KEY: &str = "WGC_DAEMON_PORT";
-const DAEMON_IDLE_SECS: u64 = 30;
+const DAEMON_IDLE_SECS: u64 = 120;
 // How often the daemon normalizes the GPG window (restore/resize/rebind),
 // independent of capture-request frequency.
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(200);
@@ -426,6 +427,7 @@ pub fn run_daemon() {
         Err(_) => return,
     };
     let _ = set_registry_dword(DAEMON_PORT_KEY, port as u32, REG_PATH_STATE);
+    display_notification(Notification::WgcDaemonStarted);
     debug_log(LogLevel::Info, LogMode::End, &format!("WgcDaemon: started / awaiting handshake (127.0.0.1:{})", port));
 
     let mut cap = build_capture_once();
@@ -502,7 +504,8 @@ pub fn run_daemon() {
     }
 
     let _ = set_registry_dword(DAEMON_PORT_KEY, 0, REG_PATH_STATE);
-    debug_log(LogLevel::Info, LogMode::Event, "WgcDaemon: exit by idle");
+    display_notification(Notification::WgcDaemonStopped);
+    debug_log(LogLevel::Info, LogMode::End, "WgcDaemon: exit by idle");
 }
 
 /// Spawn the daemon detached if it is not already running.

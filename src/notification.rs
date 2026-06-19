@@ -33,12 +33,21 @@ pub enum Notification {
     UnsupportedClient(String),
     ClientMismatch(String, String),
     AdbInputUnsupported,
+    MinitouchStarted,
+    MinitouchStopped,
+    WgcDaemonStarted,
+    WgcDaemonStopped,
 }
 
 impl Notification {
     fn level(&self) -> LogLevel {
         match self {
-            Self::Screenshot | Self::GpgShutdown => LogLevel::Info,
+            Self::Screenshot
+            | Self::GpgShutdown
+            | Self::MinitouchStarted
+            | Self::MinitouchStopped
+            | Self::WgcDaemonStarted
+            | Self::WgcDaemonStopped => LogLevel::Info,
 
             Self::WindowMinimized
             | Self::WindowWrongRatio(..)
@@ -121,6 +130,22 @@ impl Notification {
             Self::AdbInputUnsupported => (
                 "ADB Input is no longer supported\nPlease switch to Minitouch".into(),
                 "ADB Input은 지원하지 않습니다\nMinitouch로 전환해주세요".into(),
+            ),
+            Self::MinitouchStarted => (
+                "Minitouch daemon started".into(),
+                "Minitouch 데몬 시작".into(),
+            ),
+            Self::MinitouchStopped => (
+                "Minitouch daemon stopped".into(),
+                "Minitouch 데몬 종료".into(),
+            ),
+            Self::WgcDaemonStarted => (
+                "WGC capture daemon started".into(),
+                "WGC 캡처 데몬 시작".into(),
+            ),
+            Self::WgcDaemonStopped => (
+                "WGC capture daemon stopped".into(),
+                "WGC 캡처 데몬 종료".into(),
             ),
         };
         if config().client == Client::KR {

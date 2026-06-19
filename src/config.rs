@@ -182,10 +182,6 @@ pub fn check_for_update() {
         debug_log(LogLevel::Info, LogMode::Nested, &format!("Update: up to date ({})", current));
     } else {
         debug_log(LogLevel::Info, LogMode::Nested, &format!("Update: available {} -> {}", current, latest));
-        if let Some(url) = json["html_url"].as_str() {
-            debug_log(LogLevel::Info, LogMode::Nested, &format!("URL: opening {}", url));
-            let _ = open::that(url);
-        }
         display_notification(Notification::UpdateAvailable(latest.to_string()));
     }
 }
