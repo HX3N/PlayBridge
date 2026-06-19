@@ -4,6 +4,11 @@ on:
   push:
     branches: ["main"]
   workflow_dispatch:
+    inputs:
+      tag_override:
+        description: "Reuse an existing tag instead of minting a new datetime tag. Leave blank for the usual datetime version."
+        required: false
+        default: ""
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,12 +26,18 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Generate KST datetime-based version tag
+      - name: Resolve version tag
         id: version_tag
         shell: pwsh
         run: |
-          $kst = (Get-Date).AddHours(9).ToString("yyyy.MM.dd_HH.mm")
-          echo "VERSION=$kst" >> $env:GITHUB_OUTPUT
+          $override = "${{ github.event.inputs.tag_override }}"
+          if ($override) {
+            # reuse an existing tag; strip leading 'v' to avoid doubling
+            $version = $override -replace '^v', ''
+          } else {
+            $version = (Get-Date).AddHours(9).ToString("yyyy.MM.dd_HH.mm")
+          }
+          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
 
       - name: info
         run: |
