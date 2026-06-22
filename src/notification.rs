@@ -13,51 +13,36 @@ const DISPLAY_NAME: &str = "PlayBridge";
 const ICON_DATA: &[u8] = include_bytes!("../assets/icon.png");
 
 #[derive(Debug)]
-pub enum ResizeReason {
-    TooSmall,
-    TooLarge,
-}
-
-#[derive(Debug)]
 pub enum Notification {
     Screenshot,
     ScreenshotFailed,
     GpgShutdown,
     WindowMinimized,
     WindowWrongRatio(f32),
-    WindowAutoResized { prev_w: u32, prev_h: u32, target_w: u32, target_h: u32, reason: ResizeReason },
-    WindowMaximizedRestored,
+    InternalResolution { w: u32, h: u32 },
     UnknownCommand(String),
     Panic(String),
     UpdateAvailable(String),
     UnsupportedClient(String),
     ClientMismatch(String, String),
     AdbInputUnsupported,
-    MinitouchStarted,
     MinitouchStopped,
-    WgcDaemonStarted,
     WgcDaemonStopped,
 }
 
 impl Notification {
     fn level(&self) -> LogLevel {
         match self {
-            Self::Screenshot
-            | Self::GpgShutdown
-            | Self::MinitouchStarted
-            | Self::MinitouchStopped
-            | Self::WgcDaemonStarted
-            | Self::WgcDaemonStopped => LogLevel::Info,
+            Self::Screenshot | Self::GpgShutdown | Self::MinitouchStopped | Self::WgcDaemonStopped => LogLevel::Info,
 
             Self::WindowMinimized
-            | Self::WindowWrongRatio(..)
+            | Self::InternalResolution { .. }
             | Self::UnsupportedClient(..)
             | Self::ClientMismatch(..)
-            | Self::WindowAutoResized { .. }
-            | Self::AdbInputUnsupported
-            | Self::WindowMaximizedRestored => LogLevel::Warn,
+            | Self::AdbInputUnsupported => LogLevel::Warn,
 
-            Self::ScreenshotFailed | Self::UnknownCommand(..) | Self::Panic(..) => LogLevel::Error,
+            // Wrong render aspect ratio distorts everything MAA reads, so it ranks with the hard failures, not warnings.
+            Self::ScreenshotFailed | Self::WindowWrongRatio(..) | Self::UnknownCommand(..) | Self::Panic(..) => LogLevel::Error,
 
             Self::UpdateAvailable(..) => LogLevel::Update,
         }
@@ -87,21 +72,10 @@ impl Notification {
                 format!("Incorrect aspect ratio (16:{:.2})\nPlease set it to 16:9", r),
                 format!("화면 비율이 맞지 않아요 (16:{:.2})\n16:9 비율로 설정해주세요", r),
             ),
-            Self::WindowAutoResized { prev_w, prev_h, target_w, target_h, reason } => {
-                let (reason_en, reason_kr) = match reason {
-                    ResizeReason::TooSmall => ("too small", "너무 작아요"),
-                    ResizeReason::TooLarge => ("too large", "너무 커요"),
-                };
-                (
-                    format!("Window was {} ({}x{}).\nAuto-resized to {}x{}", reason_en, prev_w, prev_h, target_w, target_h),
-                    format!("창 크기가 {} ({}x{})\n{}x{}로 자동 조절됐어요", reason_kr, prev_w, prev_h, target_w, target_h),
-                )
-            }
-            Self::WindowMaximizedRestored => (
-                "Window was too large; restored from maximized state".into(),
-                "창이 너무 커서 최대화 상태를 해제했어요".into(),
+            Self::InternalResolution { w, h } => (
+                format!("Google Play Games internal resolution is {}×{}\nRecommended: 1280×720", w, h),
+                format!("Google Play Games 내부 해상도 {}×{}\n권장 해상도 1280×720", w, h),
             ),
-
             Self::ScreenshotFailed => (
                 "Screenshot failed; window not found".into(),
                 "스크린샷 실패, 창을 찾을 수 없어요".into(),
@@ -131,17 +105,9 @@ impl Notification {
                 "ADB Input is no longer supported\nPlease switch to Minitouch".into(),
                 "ADB Input은 지원하지 않습니다\nMinitouch로 전환해주세요".into(),
             ),
-            Self::MinitouchStarted => (
-                "Minitouch daemon started".into(),
-                "Minitouch 데몬 시작".into(),
-            ),
             Self::MinitouchStopped => (
                 "Minitouch daemon stopped".into(),
                 "Minitouch 데몬 종료".into(),
-            ),
-            Self::WgcDaemonStarted => (
-                "WGC capture daemon started".into(),
-                "WGC 캡처 데몬 시작".into(),
             ),
             Self::WgcDaemonStopped => (
                 "WGC capture daemon stopped".into(),
@@ -158,7 +124,7 @@ impl Notification {
     fn cooldown(&self) -> Option<u64> {
         match self {
             Self::WindowWrongRatio(..) | Self::AdbInputUnsupported => Some(10),
-            Self::WindowMinimized | Self::WindowAutoResized { .. } | Self::WindowMaximizedRestored => Some(2),
+            Self::WindowMinimized => Some(2),
             _ => None,
         }
     }
@@ -210,12 +176,11 @@ pub fn display_notification(notification: Notification) {
 
     let _ = manager.show(&toast);
 
-    let _ = set_registry_dword(&tag, now as u32, REG_PATH_COOLDOWN);
+    let _ = set_registry(&tag, now as u32, REG_PATH_COOLDOWN);
 }
 
 fn check_notification_registry(tag: &str, now: u64, cooldown_seconds: u64) -> bool {
-    match get_registry_dword(tag, REG_PATH_COOLDOWN) {
-        Ok(last_time) => now - last_time as u64 >= cooldown_seconds,
-        Err(_) => true,
-    }
+    // An absent record reads as 0, so a never-shown tag clears the cooldown on its first call.
+    let last_time = get_registry(tag, 0u32, REG_PATH_COOLDOWN) as u64;
+    now - last_time >= cooldown_seconds
 }

@@ -12,11 +12,11 @@ use windows::Win32::{
 };
 
 use crate::{
-    capture::debug_capture,
+    capture::capture_touch_overlay,
     config::{DISPLAY_HEIGHT, DISPLAY_WIDTH},
     logging::{debug_log, LogLevel, LogMode},
     notification::{display_notification, Notification},
-    window::{parent_or_self, GameWindow},
+    window::{describe_window, parent_or_self, GameWindow},
 };
 
 const TEXT_INPUT_DELAY_MS: u64 = 50;
@@ -72,8 +72,7 @@ pub fn input_text(window: &GameWindow, text: &str) {
     }
 }
 
-// Skip the full GameWindow::find() (window_list enumeration) while the cached handle is valid;
-// just refresh its client size. Re-enumerate only if it's gone.
+// Skip the costly GameWindow::find() (window_list enumeration) while the cached handle is alive; re-enumerate only if it's gone.
 fn refresh_window(window: GameWindow, w_width: &mut i32, w_height: &mut i32) -> GameWindow {
     if unsafe { IsWindow(Some(window.hwnd)).as_bool() } {
         let (w, h) = window.get_client_size();
@@ -85,13 +84,13 @@ fn refresh_window(window: GameWindow, w_width: &mut i32, w_height: &mut i32) -> 
         let (w, h) = new_win.get_client_size();
         *w_width = w;
         *w_height = h;
+        debug_log(LogLevel::Info, LogMode::Event, &format!("Minitouch: rebound {}", describe_window(new_win.hwnd, None)));
         return new_win;
     }
     window
 }
 
 pub fn run_minitouch_daemon() {
-    display_notification(Notification::MinitouchStarted);
     debug_log(LogLevel::Info, LogMode::End, "Minitouch: started / awaiting handshake");
 
     println!("v 1");
@@ -111,6 +110,7 @@ pub fn run_minitouch_daemon() {
         None => return,
     };
     let (mut w_width, mut w_height) = window.get_client_size();
+    debug_log(LogLevel::Info, LogMode::Event, &format!("Minitouch: bound {}", describe_window(window.hwnd, None)));
 
     while let Some(Ok(line)) = iterator.next() {
         if line.is_empty() {
@@ -177,7 +177,7 @@ pub fn run_minitouch_daemon() {
                     post_message(window.hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(last_relative_pos));
                     post_message(window.hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(last_relative_pos));
                     is_down = false;
-                    debug_capture(&window, &touch_path);
+                    capture_touch_overlay(&window, &touch_path);
                     touch_path.clear();
                 }
             }

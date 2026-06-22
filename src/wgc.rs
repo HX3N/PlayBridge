@@ -33,24 +33,60 @@ use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::System::WinRT::Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess};
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
-use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetClientRect, IsWindow, GA_ROOT};
 
 use crate::capture::{resize_to_display, transmit_pixels_nc};
-use crate::config::{get_registry_dword, set_registry_dword, DISPLAY_HEIGHT, DISPLAY_WIDTH, REG_PATH_STATE};
+use crate::config::{config, get_registry, set_registry, DISPLAY_HEIGHT, DISPLAY_WIDTH, REG_PATH_STATE};
 use crate::logging::{debug_log, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification};
-use crate::window::GameWindow;
+use crate::window::{describe_window, ensure_game_ready, GameWindow};
 
 const DAEMON_MUTEX: &str = "Local\\PlayBridgeWgcDaemon";
 const DAEMON_PORT_KEY: &str = "WGC_DAEMON_PORT";
 const DAEMON_IDLE_SECS: u64 = 120;
-// How often the daemon normalizes the GPG window (restore/resize/rebind),
-// independent of capture-request frequency.
+// How often the daemon normalizes the GPG window (restore/resize/rebind), independent of request rate.
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(200);
+// A live GPG window composes continuously (Arknights always animates), so a frame older than this means capture froze:
+// the window was hidden/closed but its HWND lingers, so IsWindow/find can't see the loss. Serve black and re-verify.
+const FRAME_STALE: Duration = Duration::from_secs(1);
+// While no window is bound, retry the relaunch no more often than this — start_game_if_needed blocks ~1s per attempt.
+const RELAUNCH_COOLDOWN: Duration = Duration::from_secs(10);
 const IPC_CONNECT_TIMEOUT_MS: u64 = 500;
 // Client must wait out the full frame delivery before the ack (matches `nc -w 3`).
 const IPC_ACK_TIMEOUT_MS: u64 = 3000;
+
+// Render resolution last checked, keyed by value so a mid-session change re-fires; daemon-lifetime memory only.
+static RES_CHECK: Mutex<Option<(u32, u32)>> = Mutex::new(None);
+
+// Aspect-ratio / resolution check against store.db, run once per value at (re)bind.
+// Ratio gates: a non-16:9 render is distorted, so it stops there rather than also flagging the resolution.
+fn check_render_resolution() {
+    let package = config().client.package();
+    if package.is_empty() {
+        return;
+    }
+    let Some((w, h)) = crate::store::render_resolution(package) else {
+        return;
+    };
+
+    {
+        let mut last = RES_CHECK.lock().unwrap();
+        if *last == Some((w, h)) {
+            return;
+        }
+        *last = Some((w, h));
+    }
+
+    let height_ratio = h as f32 / (w as f32 / 16.0);
+    if (height_ratio - 9.0).abs() > 0.1 {
+        display_notification(Notification::WindowWrongRatio(height_ratio));
+        return;
+    }
+
+    if (w, h) != (DISPLAY_WIDTH, DISPLAY_HEIGHT) {
+        display_notification(Notification::InternalResolution { w, h });
+    }
+}
 
 fn black_frame_rgba() -> Vec<u8> {
     vec![0u8; (DISPLAY_WIDTH * DISPLAY_HEIGHT * 4) as usize]
@@ -123,8 +159,7 @@ fn create_staging(device: &ID3D11Device, desc: &D3D11_TEXTURE2D_DESC) -> windows
     Ok(staging.unwrap())
 }
 
-// Copy the captured frame into `out` (BGRA, top-down), reusing the staging texture and refilling `out` in place.
-// Returns the frame's (width, height).
+// Reuses the staging texture and refills `out` in place to avoid per-frame allocations.
 fn process_frame(
     device: &ID3D11Device,
     context: &ID3D11DeviceContext,
@@ -222,7 +257,16 @@ const EDGE_FILL: EdgeFill = EdgeFill::Replicate;
 
 // DWM skips the right/bottom ~3px, so that edge arrives transparent and unrecoverable.
 // A buffer clamped to the captured size resizes at the wrong scale and pushes the UI bottom-right, so it stays full cw x ch.
-// The alpha walk marks the opaque region and `fill` covers the transparent rest.
+// The alpha walk finds the opaque extent (ox, oy); `fill` covers the transparent rest.
+//
+//   out = cw x ch (full, never clamped):
+//   x=0          ox          cw
+//   +------------+-----------+ y=0      opaque: x < ox && y < oy  -> real content, kept
+//   |  opaque    |   fill    |          fill:   x >= ox || y >= oy -> padded edge,
+//   |  ox x oy   |           |                  replicate the last opaque pixel (or black)
+// oy+------------+           |
+//   |          fill          |          ox,oy sit just inside the copied area (avail_w/avail_h);
+//   +------------------------+ ch       the gap between them is DWM's transparent ~3px.
 fn crop_region(frame: &[u8], fw: u32, fh: u32, rect: (i32, i32, i32, i32), fill: EdgeFill) -> Option<(Vec<u8>, u32, u32)> {
     let (cx, cy, cw, ch) = rect;
     if cw <= 0 || ch <= 0 || cx < 0 || cy < 0 {
@@ -276,8 +320,7 @@ fn crop_region(frame: &[u8], fw: u32, fh: u32, rect: (i32, i32, i32, i32), fill:
     Some((out, cw, ch))
 }
 
-// Win11 rounded corners can appear as transparent pixels in WGC near the crop edge.
-// Square the window while capturing; square=false restores the default.
+// Win11 rounded corners surface as transparent pixels in WGC near the crop edge, so square the window while capturing.
 fn set_window_corners(top: HWND, square: bool) {
     let pref: DWM_WINDOW_CORNER_PREFERENCE = if square { DWMWCP_DONOTROUND } else { DWMWCP_DEFAULT };
     unsafe {
@@ -356,6 +399,11 @@ impl WgcCapture {
         self.bound_client
     }
 
+    /// Age of the cached frame, None if nothing captured yet. Grows once WGC stops delivering (window hidden/gone).
+    pub fn latest_frame_age(&self) -> Option<Duration> {
+        self.latest.lock().unwrap().as_ref().map(|(_, _, _, captured_at)| captured_at.elapsed())
+    }
+
     /// Latest frame cropped to the CROSVM client area, resized to display, RGBA.
     pub fn latest_display_rgba(&self) -> Option<(Vec<u8>, Duration, Duration)> {
         let t0 = Instant::now();
@@ -377,7 +425,7 @@ impl WgcCapture {
     }
 }
 
-/// Physical client size of the CROSVM child (daemon is per-monitor DPI aware).
+/// Physical client size of the CROSVM child.
 fn child_client_size(child: HWND) -> (i32, i32) {
     let mut rect = RECT::default();
     if unsafe { GetClientRect(child, &mut rect) }.is_ok() {
@@ -397,9 +445,12 @@ fn daemon_already_running() -> bool {
 
 fn build_capture_once() -> Option<WgcCapture> {
     let w = GameWindow::find()?;
-    w.normalize();
+    w.restore();
+    check_render_resolution();
     let top = unsafe { GetAncestor(w.hwnd, GA_ROOT) };
-    WgcCapture::new(w.hwnd, top).ok()
+    let cap = WgcCapture::new(w.hwnd, top).ok()?;
+    debug_log(LogLevel::Info, LogMode::Event, &format!("WgcDaemon: bound {}", describe_window(w.hwnd, Some(top))));
+    Some(cap)
 }
 
 fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
@@ -415,12 +466,14 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     }
     let maa_port = u16::from_le_bytes(portbuf);
 
-    // port == 0 is the byte-return verb (fake nemu DLL):
-    // hand the raw RGBA frame back to the caller instead of streaming to MAA's nc port.
+    // Fetch the frame and start the timer once; both verbs reuse it.
+    let t0 = Instant::now();
+    let frame = cap.and_then(|c| c.latest_display_rgba()).filter(|(_, age, _)| *age < FRAME_STALE);
+
+    // port == 0 is the byte-return verb (fake nemu DLL): hand the RGBA frame to the caller instead of MAA's nc port.
     // Response: [status: u8] then, if status==1, [w: u32 LE][h: u32 LE][rgba...].
     if maa_port == 0 {
-        let t0 = Instant::now();
-        match cap.and_then(|c| c.latest_display_rgba()) {
+        match frame {
             Some((rgba, frame_age, crop_resize)) => {
                 let t1 = Instant::now();
                 write_extras_frame(&mut stream, &rgba);
@@ -437,16 +490,14 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
                 );
             }
             None => {
-                let rgba = black_frame_rgba();
-                write_extras_frame(&mut stream, &rgba);
-                debug_log(LogLevel::Warn, LogMode::Event, "WgcDaemon: extras no frame cached, sent black frame");
+                write_extras_frame(&mut stream, &black_frame_rgba());
+                debug_log(LogLevel::Warn, LogMode::Event, "WgcDaemon: extras no fresh frame, sent black frame");
             }
         }
         return;
     }
 
-    let t0 = Instant::now();
-    let delivered = match cap.and_then(|c| c.latest_display_rgba()) {
+    let delivered = match frame {
         Some((rgba, frame_age, crop_resize)) => {
             let t1 = Instant::now();
             transmit_pixels_nc(rgba, maa_port);
@@ -465,11 +516,54 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
         }
         None => {
             transmit_pixels_nc(black_frame_rgba(), maa_port);
-            debug_log(LogLevel::Warn, LogMode::Event, "WgcDaemon: rawbync no frame cached, sent black frame");
+            debug_log(LogLevel::Warn, LogMode::Event, "WgcDaemon: rawbync no fresh frame, sent black frame");
             1u8
         }
     };
     let _ = stream.write_all(&[delivered]);
+}
+
+/// One maintenance tick: re-verify the window and rebind/relaunch as needed; returns true when it's gone (exit).
+fn maintain(cap: &mut Option<WgcCapture>, last_relaunch: &mut Option<Instant>) -> bool {
+    // IsWindow stays true for a hidden-but-alive GPG tree; fresh frames are the real liveness signal.
+    // While they flow reuse the cached child; once they stall past FRAME_STALE, re-verify via window.rs's title search.
+    let w = match cap.as_ref() {
+        Some(c) if c.latest_frame_age().is_some_and(|age| age < FRAME_STALE) => Some(GameWindow { hwnd: c.child() }),
+        _ => GameWindow::find(),
+    };
+
+    match w {
+        None => {
+            // find() miss with a bound capture means the window is really gone, so exit and let a fresh daemon rebind after relaunch.
+            // cap == None is the startup/post-exit wait — relaunch instead of exiting.
+            if cap.is_some() {
+                debug_log(LogLevel::Warn, LogMode::Event, "WgcDaemon: window gone, exiting");
+                return true;
+            }
+            // No window yet: relaunch the game, throttled.
+            // This runs only while the window is down, so the ~1s launch wait never lands inside a benchmark capture.
+            if last_relaunch.is_none_or(|t| t.elapsed() >= RELAUNCH_COOLDOWN) {
+                *last_relaunch = Some(Instant::now());
+                ensure_game_ready();
+            }
+        }
+        Some(w) => {
+            w.restore();
+            let needs_rebind = cap
+                .as_ref()
+                .map(|c| w.hwnd != c.child() || child_client_size(w.hwnd) != c.bound_client())
+                .unwrap_or(true);
+            if needs_rebind {
+                let top = unsafe { GetAncestor(w.hwnd, GA_ROOT) };
+                if let Ok(c) = WgcCapture::new(w.hwnd, top) {
+                    debug_log(LogLevel::Info, LogMode::Event, &format!("WgcDaemon: rebound {}", describe_window(w.hwnd, Some(top))));
+                    check_render_resolution();
+                    *cap = Some(c);
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Long-lived daemon process (`--wgc-daemon`).
@@ -480,7 +574,6 @@ pub fn run_daemon() {
     }
 
     unsafe {
-        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
     }
 
@@ -495,8 +588,7 @@ pub fn run_daemon() {
         Ok(a) => a.port(),
         Err(_) => return,
     };
-    let _ = set_registry_dword(DAEMON_PORT_KEY, port as u32, REG_PATH_STATE);
-    display_notification(Notification::WgcDaemonStarted);
+    let _ = set_registry(DAEMON_PORT_KEY, port as u32, REG_PATH_STATE);
     debug_log(LogLevel::Info, LogMode::End, &format!("WgcDaemon: started / awaiting handshake (127.0.0.1:{})", port));
 
     let mut cap = build_capture_once();
@@ -521,6 +613,7 @@ pub fn run_daemon() {
 
     let mut last_active = Instant::now();
     let mut last_maint = Instant::now();
+    let mut last_relaunch: Option<Instant> = None;
     loop {
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(stream) => {
@@ -529,45 +622,18 @@ pub fn run_daemon() {
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if last_active.elapsed() > Duration::from_secs(DAEMON_IDLE_SECS) {
+                    debug_log(LogLevel::Info, LogMode::Event, "WgcDaemon: idle timeout, exiting");
                     break;
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
 
-        // Window maintenance — must live outside the recv branch
-        // so it still runs while a busy MAA keeps recv_timeout returning Ok.
+        // Runs outside the recv branch so maintenance still ticks while a busy MAA keeps recv_timeout returning Ok.
         if last_maint.elapsed() >= MAINTENANCE_INTERVAL {
             last_maint = Instant::now();
-
-            // Skip the full GameWindow::find() while the bound window is alive;
-            // reuse the cached handle (normalize/rebind checks still run below).
-            let w = match cap.as_ref() {
-                Some(c) if unsafe { IsWindow(Some(c.child())).as_bool() } => Some(GameWindow { hwnd: c.child() }),
-                _ => GameWindow::find(),
-            };
-
-            match w {
-                None => {
-                    if cap.is_some() {
-                        debug_log(LogLevel::Warn, LogMode::Event, "WgcDaemon: window gone, serving black frames");
-                        cap = None;
-                    }
-                }
-                Some(w) => {
-                    w.normalize(); // restore from minimized; resize if too small/large/maximized
-                    let needs_rebind = cap
-                        .as_ref()
-                        .map(|c| w.hwnd != c.child() || child_client_size(w.hwnd) != c.bound_client())
-                        .unwrap_or(true);
-                    if needs_rebind {
-                        let top = unsafe { GetAncestor(w.hwnd, GA_ROOT) };
-                        if let Ok(c) = WgcCapture::new(w.hwnd, top) {
-                            debug_log(LogLevel::Info, LogMode::Event, "WgcDaemon: rebound (window changed)");
-                            cap = Some(c);
-                        }
-                    }
-                }
+            if maintain(&mut cap, &mut last_relaunch) {
+                break;
             }
         }
     }
@@ -579,9 +645,9 @@ pub fn run_daemon() {
         }
     }
 
-    let _ = set_registry_dword(DAEMON_PORT_KEY, 0, REG_PATH_STATE);
+    let _ = set_registry(DAEMON_PORT_KEY, 0u32, REG_PATH_STATE);
     display_notification(Notification::WgcDaemonStopped);
-    debug_log(LogLevel::Info, LogMode::End, "WgcDaemon: exit by idle");
+    debug_log(LogLevel::Info, LogMode::End, "WgcDaemon: stopped");
 }
 
 /// Spawn the daemon detached if it is not already running.
@@ -597,7 +663,7 @@ pub fn ensure_daemon() {
 /// Ask the daemon to deliver the latest frame to MAA's nc `port`.
 /// Returns true if the daemon confirmed delivery.
 pub fn deliver_via_daemon(maa_port: u16) -> bool {
-    let dport = get_registry_dword(DAEMON_PORT_KEY, REG_PATH_STATE).unwrap_or(0);
+    let dport = get_registry(DAEMON_PORT_KEY, 0u32, REG_PATH_STATE);
     if dport == 0 {
         return false;
     }

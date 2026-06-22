@@ -36,7 +36,7 @@ PlayExtras는 MAA의 **MumuExtras** 흐름을 모방합니다. MAA가 벤더 `ex
 ## 단독 실행
 
 `PlayBridgeADB`를 직접 실행하면 **Google Play Games**의 스크린샷을 캡처하여 바탕화면에 저장합니다.<br>
-`--debug`를 붙이면 디버그 모드를 토글할 수 있습니다 (또는 레지스트리 값 `Software\PlayBridge\config\DEBUG_CAPTURE`를 직접 수정).
+`--touch-overlay`를 붙이면 터치 경로 오버레이 캡처를 토글합니다. 각 minitouch 탭/스와이프 경로를 프레임 위에 그려 저장해 검증할 수 있습니다 (또는 레지스트리 값 `Software\PlayBridge\config\TOUCH_OVERLAY`를 직접 수정).
 
 ## RawByNc (레거시)
 

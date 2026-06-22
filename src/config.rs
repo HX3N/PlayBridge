@@ -1,6 +1,10 @@
 use chrono::Utc;
 use std::sync::{Arc, LazyLock, RwLock};
-use winreg::{enums::*, types::FromRegValue, RegKey};
+use winreg::{
+    enums::*,
+    types::{FromRegValue, ToRegValue},
+    RegKey,
+};
 
 use crate::logging::{debug_log, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification};
@@ -15,7 +19,7 @@ pub const REG_PATH_STATE: &str = r"Software\PlayBridge\state";
 pub const REG_PATH_COOLDOWN: &str = r"Software\PlayBridge\cooldown";
 pub const UPDATE_CHECK_COOLDOWN: u64 = 60 * 60 * 24; // 24 hours
 
-pub const MAX_DEBUG_CAPTURE_FILES: usize = 100;
+pub const MAX_TOUCH_OVERLAY_FILES: usize = 100;
 
 const DEVELOPMENT_VERSION: &str = "development";
 
@@ -67,13 +71,17 @@ impl Client {
 }
 
 pub struct Config {
-    pub debug_capture: bool,
+    // Touch-path overlay capture toggle (registry TOUCH_OVERLAY); see capture::capture_touch_overlay.
+    pub touch_overlay: bool,
     pub client: Client,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { debug_capture: get_reg_value("DEBUG_CAPTURE", 0u32) != 0, client: Client::from_str(&get_reg_value("CLIENT", String::new())) }
+        Self {
+            touch_overlay: get_registry("TOUCH_OVERLAY", 0u32, REG_PATH_CONFIG) != 0,
+            client: Client::from_str(&get_registry("CLIENT", String::new(), REG_PATH_CONFIG)),
+        }
     }
 }
 
@@ -106,27 +114,28 @@ pub fn set_client(client: Client) {
         LogMode::Nested,
         &format!("Client: set {} (title: {}, package: {})", client.as_str(), client.title(), client.package()),
     );
-    set_registry_value("CLIENT", client.as_str()).unwrap();
+    set_registry("CLIENT", client.as_str(), REG_PATH_CONFIG).unwrap();
     Config::reload();
 }
 
-pub fn set_benchmark_mode(count: u32) {
-    let _ = set_registry_dword("BENCHMARK_COUNT", count, REG_PATH_STATE);
-    debug_log(LogLevel::Info, LogMode::Nested, &format!("Benchmark: mode set to {}", count));
+pub fn set_benchmark_mode() {
+    let _ = set_registry("BENCHMARK", 1u32, REG_PATH_STATE);
+    debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: armed");
 }
 
+// One-shot flag: MAA arms benchmark with `wm size`, then fires a single screencap to measure throughput.
+// Consume it so only that one capture is silenced and normal capture resumes on the next request.
 pub fn check_benchmark_mode() -> bool {
-    let count = get_registry_dword("BENCHMARK_COUNT", REG_PATH_STATE).unwrap_or(0);
-    if count > 0 {
-        let _ = set_registry_dword("BENCHMARK_COUNT", count - 1, REG_PATH_STATE);
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Benchmark: active (remaining {} -> {})", count, count - 1));
+    if get_registry("BENCHMARK", 0u32, REG_PATH_STATE) != 0 {
+        let _ = set_registry("BENCHMARK", 0u32, REG_PATH_STATE);
+        debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: consumed");
         return true;
     }
     false
 }
 
 pub fn peek_benchmark_mode() -> bool {
-    get_registry_dword("BENCHMARK_COUNT", REG_PATH_STATE).unwrap_or(0) > 0
+    get_registry("BENCHMARK", 0u32, REG_PATH_STATE) != 0
 }
 
 pub fn version() -> &'static str {
@@ -135,7 +144,7 @@ pub fn version() -> &'static str {
 
 pub fn check_version() {
     let current_version = version();
-    let stored_version: String = get_reg_value("VERSION", String::new());
+    let stored_version: String = get_registry("VERSION", String::new(), REG_PATH_CONFIG);
 
     println!("PlayBridge {}", current_version);
 
@@ -145,13 +154,13 @@ pub fn check_version() {
     }
 
     debug_log(LogLevel::Info, LogMode::Nested, &format!("Version: updated {} -> {}", stored_version, current_version));
-    set_registry_value("VERSION", current_version).unwrap();
+    set_registry("VERSION", current_version, REG_PATH_CONFIG).unwrap();
     Config::reload();
 }
 
 pub fn check_for_update() {
     let current = version();
-    let last_check: u64 = get_reg_value("LAST_UPDATE_CHECK", 0);
+    let last_check: u64 = get_registry("LAST_UPDATE_CHECK", 0, REG_PATH_CONFIG);
     let now = Utc::now().timestamp() as u64;
 
     let is_dev = current == DEVELOPMENT_VERSION;
@@ -163,7 +172,7 @@ pub fn check_for_update() {
         return;
     }
 
-    let _ = set_registry_value("LAST_UPDATE_CHECK", now);
+    let _ = set_registry("LAST_UPDATE_CHECK", now, REG_PATH_CONFIG);
 
     let json: serde_json::Value = match ureq::get(REPOSITORY_URL)
         .header("User-Agent", "PlayBridge")
@@ -186,46 +195,22 @@ pub fn check_for_update() {
     }
 }
 
-pub fn toggle_debug() {
-    toggle_config("DEBUG_CAPTURE");
+pub fn toggle_touch_overlay() {
+    toggle_config("TOUCH_OVERLAY");
 }
 
-pub fn get_registry_dword(key_name: &str, path: &str) -> std::io::Result<u32> {
+/// Read a value from an HKCU subkey, returning `default` when the subkey or value is absent.
+pub fn get_registry<T: FromRegValue>(key_name: &str, default: T, path: &str) -> T {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let key = hkcu.open_subkey(path)?;
-    key.get_value(key_name)
+    hkcu.open_subkey(path).and_then(|key| key.get_value(key_name)).unwrap_or(default)
 }
 
-pub fn set_registry_dword(key_name: &str, value: u32, path: &str) -> std::io::Result<()> {
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hkcu.create_subkey(path)?;
-    key.set_value(key_name, &value)?;
-    Ok(())
-}
-
-/// Write a string to an HKCU subkey.
-/// Used to publish EXE_PATH so the fake nemu DLL can locate and spawn the WGC daemon.
-pub fn set_registry_string(key_name: &str, value: &str, path: &str) -> std::io::Result<()> {
+/// Write a value to an HKCU subkey, creating it if needed.
+/// Generic over the value type so dword and string keys share one write path.
+pub fn set_registry<T: ToRegValue>(key_name: &str, value: T, path: &str) -> std::io::Result<()> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu.create_subkey(path)?;
-    key.set_value(key_name, &value)?;
-    Ok(())
-}
-
-pub fn set_registry_value<T: winreg::types::ToRegValue>(key_name: &str, value: T) -> std::io::Result<()> {
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hkcu.create_subkey(REG_PATH_CONFIG)?;
-    key.set_value(key_name, &value)?;
-    Ok(())
-}
-
-fn get_reg_value<T>(key_name: &str, default_value: T) -> T
-where
-    T: FromRegValue + 'static,
-{
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hkcu.create_subkey(REG_PATH_CONFIG).unwrap();
-    key.get_value(key_name).unwrap_or(default_value)
+    key.set_value(key_name, &value)
 }
 
 fn toggle_config(key_name: &str) {

@@ -36,7 +36,7 @@ PlayExtras impersonates MAA's **MumuExtras** flow: MAA loads a vendor `external_
 ## Standalone usage
 
 Running `PlayBridgeADB` directly captures a screenshot of **Google Play Games** and saves it to the Desktop.<br>
-Add `--debug` to toggle debug mode (or edit the registry value at `Software\PlayBridge\config\DEBUG_CAPTURE`).
+Add `--touch-overlay` to toggle the touch-path overlay capture, which saves each minitouch tap/swipe drawn over the frame for verification (or edit the registry value at `Software\PlayBridge\config\TOUCH_OVERLAY`).
 
 ## RawByNc (legacy)
 

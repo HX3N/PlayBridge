@@ -2,7 +2,7 @@ use std::{
     cell::RefCell,
     env,
     fs::File,
-    io::{stdout, Read, Write},
+    io::{Read, Write},
     net::{Shutdown, TcpStream},
     time::Duration,
 };
@@ -11,7 +11,6 @@ use chrono::Local;
 use fast_image_resize::{images::Image, PixelType, ResizeAlg, ResizeOptions, Resizer};
 use image::{codecs::png::PngEncoder, Rgba, RgbaImage};
 use win_screenshot::prelude::{capture_window_ex, Area, Using};
-use windows::Win32::UI::HiDpi::{GetWindowDpiAwarenessContext, SetThreadDpiAwarenessContext};
 
 use crate::config::*;
 use crate::logging::{debug_log, get_debug_folder, LogLevel, LogMode};
@@ -20,25 +19,6 @@ use crate::window::GameWindow;
 
 const LOOPBACK_IP: &str = "127.0.0.1";
 const TCP_TIMEOUT_MS: u64 = 100;
-
-pub fn send_capture(window: &GameWindow) {
-    let pixels = capture_resized_pixels(window).unwrap_or_else(black_frame_pixels);
-    let img = RgbaImage::from_raw(DISPLAY_WIDTH, DISPLAY_HEIGHT, pixels).expect("Failed to create RgbaImage");
-    img.write_with_encoder(PngEncoder::new(&mut stdout().lock()))
-        .expect("Failed to encode PNG to stdout");
-}
-
-pub fn send_capture_nc(window: &GameWindow, port: u16) {
-    let pixels = capture_resized_pixels(window).unwrap_or_else(black_frame_pixels);
-    transmit_pixels_nc(pixels, port);
-}
-
-pub fn send_black_frame() {
-    let pixels = black_frame_pixels();
-    let img = RgbaImage::from_raw(DISPLAY_WIDTH, DISPLAY_HEIGHT, pixels).expect("Failed to create RgbaImage");
-    img.write_with_encoder(PngEncoder::new(&mut stdout().lock()))
-        .expect("Failed to encode PNG to stdout");
-}
 
 pub fn send_black_frame_nc(port: u16) {
     transmit_pixels_nc(black_frame_pixels(), port);
@@ -58,9 +38,11 @@ pub fn screenshot(window: &GameWindow) {
     display_notification(Notification::Screenshot);
 }
 
-pub fn debug_capture(window: &GameWindow, path: &[(i32, i32)]) {
+/// Verifies that taps/swipes committed by MAA land at the intended screen coordinates.
+/// TOUCH_OVERLAY-gated touch-path visualizer; keep unrelated instrumentation off this function.
+pub fn capture_touch_overlay(window: &GameWindow, path: &[(i32, i32)]) {
     Config::reload();
-    if !config().debug_capture || path.is_empty() {
+    if !config().touch_overlay || path.is_empty() {
         return;
     }
 
@@ -82,7 +64,7 @@ pub fn debug_capture(window: &GameWindow, path: &[(i32, i32)]) {
         }
     }
 
-    let filename = format!("Debug_{}.png", Local::now().format("%Y.%m.%d_%H.%M.%S.%3f"));
+    let filename = format!("TouchOverlay_{}.png", Local::now().format("%Y.%m.%d_%H.%M.%S.%3f"));
     let capture_folder = get_debug_folder().join("PlayBridge");
     let _ = std::fs::create_dir_all(&capture_folder);
     cleanup_old_captures(&capture_folder);
@@ -90,28 +72,19 @@ pub fn debug_capture(window: &GameWindow, path: &[(i32, i32)]) {
     let filepath = capture_folder.join(&filename);
     img.write_with_encoder(PngEncoder::new(File::create(&filepath).unwrap())).unwrap();
 
-    debug_log(LogLevel::Info, LogMode::Nested, &format!("Debug: {}", filepath.display()));
+    debug_log(LogLevel::Info, LogMode::Nested, &format!("TouchOverlay: {}", filepath.display()));
 }
 
 fn capture_resized_pixels(window: &GameWindow) -> Option<Vec<u8>> {
     window.restore();
 
-    let (log_w, log_h) = window.get_client_size();
     let hwnd = window.hwnd;
-
-    // Handle mixed DPI settings properly in multiple-monitor setups (ex. main 125%, sub 100%)
-    unsafe { _ = SetThreadDpiAwarenessContext(GetWindowDpiAwarenessContext(hwnd)) };
 
     // DWM skips the same right/bottom ~3px as WGC (see crop_region in wgc.rs).
     // PrintWindow writes that edge as black in a full-size buffer, so the scale holds and only a thin black edge remains.
-    // Fallback path, left as-is.
     let buf = capture_window_ex(hwnd.0 as isize, Using::PrintWindow, Area::ClientOnly, None, None).ok()?;
 
-    let phys_w = buf.width;
-    let phys_h = buf.height;
-    window.validate_and_resize(log_w, log_h, phys_w, phys_h);
-
-    resize_to_display(buf.pixels, phys_w, phys_h)
+    resize_to_display(buf.pixels, buf.width, buf.height)
 }
 
 // Reused so fast_image_resize keeps its scratch buffers instead of reallocating per resize.
@@ -211,17 +184,17 @@ fn cleanup_old_captures(folder: &std::path::Path) {
         .filter_map(|e| e.ok())
         .filter(|e| {
             let name = e.file_name().to_string_lossy().to_string();
-            name.starts_with("Debug_") && name.ends_with(".png")
+            name.starts_with("TouchOverlay_") && name.ends_with(".png")
         })
         .collect();
 
-    if files.len() < MAX_DEBUG_CAPTURE_FILES {
+    if files.len() < MAX_TOUCH_OVERLAY_FILES {
         return;
     }
 
     files.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH));
 
-    let num_to_remove = files.len().saturating_sub(MAX_DEBUG_CAPTURE_FILES - 1);
+    let num_to_remove = files.len().saturating_sub(MAX_TOUCH_OVERLAY_FILES - 1);
 
     for entry in files.iter().take(num_to_remove) {
         let _ = std::fs::remove_file(entry.path());

@@ -5,16 +5,21 @@ mod config;
 mod input;
 mod logging;
 mod notification;
+mod store;
 mod wgc;
 mod window;
 
-use crate::config::{check_benchmark_mode, check_for_update, check_version, toggle_debug, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
+
+use crate::config::{check_benchmark_mode, check_for_update, check_version, toggle_touch_overlay, DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use crate::config::{peek_benchmark_mode, set_benchmark_mode};
 use crate::logging::{debug_log, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification};
-use crate::window::{apply_intent_package, ensure_game_ready, print_window_list, start_game_if_needed, GameWindow};
+use crate::window::{apply_intent_package, ensure_game_ready, start_game_if_needed, GameWindow};
 
 fn main() {
+    unsafe { _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
+
     let start = Instant::now();
 
     logging::register_panic_hook();
@@ -28,7 +33,7 @@ fn main() {
 
     // Publish exe path so the fake nemu DLL can spawn the WGC daemon.
     if let Ok(exe) = env::current_exe() {
-        let _ = config::set_registry_string("EXE_PATH", &exe.to_string_lossy(), config::REG_PATH_STATE);
+        let _ = config::set_registry("EXE_PATH", exe.to_string_lossy().as_ref(), config::REG_PATH_STATE);
     }
 
     if args.iter().any(|a| a == "--wgc-daemon") {
@@ -59,17 +64,15 @@ enum Command {
     StartActivity { intent: String },
     Echo { text: String },
     ForceStop,
-    ToggleDebug,
+    ToggleTouchOverlay,
 
     // [Info & State]
-    WindowList,
     WindowDisplays,
     Devices,
     GetPropRelease,
     GetUuid,
 
     // [Screen Capture]
-    Screencap,
     ScreencapNc { port: u16 },
 
     // [Minitouch]
@@ -98,15 +101,13 @@ fn parse_command(args: &[String]) -> Command {
         c if c.contains("am start -n") => Command::StartActivity { intent: args[6].clone() },
         c if c.contains("shell echo") => Command::Echo { text: args.get(4..).map_or(String::new(), |s| s.join(" ")) }, // Connection Preset - Compatible Mode
         c if c.contains("am force-stop") || c.contains("input keyevent HOME") => Command::ForceStop,
-        c if c.contains("--debug") => Command::ToggleDebug,
+        c if c.contains("--touch-overlay") => Command::ToggleTouchOverlay,
 
-        c if c.contains("--list") => Command::WindowList,
         c if c.contains("dumpsys window displays") || c.contains("wm size") => Command::WindowDisplays,
         c if c.contains("devices") => Command::Devices,
         c if c.contains("getprop ro.build.version.release") => Command::GetPropRelease,
         c if c.contains("settings get secure android_id") => Command::GetUuid,
 
-        c if c.contains("exec-out screencap -p") => Command::Screencap,
         c if c.contains("exec-out screencap | nc -w 3 10.0.2.2") => Command::ScreencapNc { port: args[9].parse().unwrap_or(0) },
 
         c if c.contains("ro.product.cpu.abilist") => Command::GetPropAbilist,
@@ -118,6 +119,8 @@ fn parse_command(args: &[String]) -> Command {
 
         c if c.contains("cat /proc/net/arp")
             || c.contains("disconnect")
+            // Unsupported screencap modes (Encode -p, gzip): stay silent so MAA falls back instead of an "unknown command" toast.
+            || c.contains("exec-out screencap -p")
             || c.contains("exec-out screencap | gzip -1")
             || c.contains("start-server")
             || c.contains("kill-server")
@@ -163,16 +166,13 @@ fn execute_command(command: Command) {
             }
             display_notification(Notification::GpgShutdown);
         }
-        Command::ToggleDebug => {
-            toggle_debug();
+        Command::ToggleTouchOverlay => {
+            toggle_touch_overlay();
         }
 
-        Command::WindowList => {
-            print_window_list();
-        }
         Command::WindowDisplays => {
             println!("{} {}", DISPLAY_WIDTH, DISPLAY_HEIGHT);
-            set_benchmark_mode(2);
+            set_benchmark_mode();
         }
         Command::Devices => {
             println!("List of devices attached");
@@ -188,36 +188,17 @@ fn execute_command(command: Command) {
             println!("0000000000000000");
         }
 
-        Command::Screencap => {
-            if check_benchmark_mode() {
-                debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: sent black frame (Encode)");
-                capture::send_black_frame();
-            } else if let Some(w) = window {
-                capture::send_capture(&w);
-            } else {
-                debug_log(LogLevel::Warn, LogMode::Nested, "Window: not found, sent black frame (Encode)");
-                capture::send_black_frame();
-            }
-        }
         Command::ScreencapNc { port } => {
             if check_benchmark_mode() {
-                debug_log(LogLevel::Info, LogMode::Nested, &format!("RawByNc: connecting to 127.0.0.1:{}", port));
                 debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: sent black frame (RawByNc)");
                 capture::send_black_frame_nc(port);
+            } else if wgc::deliver_via_daemon(port) {
+                debug_log(LogLevel::Info, LogMode::Nested, "RawByNc: delivered via WGC daemon");
             } else {
-                // WGC daemon is the default; PrintWindow is the fallback.
-                if wgc::deliver_via_daemon(port) {
-                    debug_log(LogLevel::Info, LogMode::Nested, "RawByNc: delivered via WGC daemon");
-                } else {
-                    debug_log(LogLevel::Info, LogMode::Nested, "RawByNc: daemon unavailable, spawning + PrintWindow fallback");
-                    wgc::ensure_daemon();
-                    if let Some(w) = window {
-                        capture::send_capture_nc(&w, port);
-                    } else {
-                        debug_log(LogLevel::Warn, LogMode::Nested, "Window: not found, sent black frame (RawByNc)");
-                        capture::send_black_frame_nc(port);
-                    }
-                }
+                // Daemon not warm yet: spawn it and send a black frame this once; the next request hits the warm daemon.
+                wgc::ensure_daemon();
+                debug_log(LogLevel::Info, LogMode::Nested, "RawByNc: daemon cold, spawned + sent black frame");
+                capture::send_black_frame_nc(port);
             }
         }
 

@@ -4,16 +4,12 @@ use win_screenshot::prelude::*;
 use windows::core::PCWSTR;
 use windows::Win32::{
     Foundation::{HWND, RECT},
-    UI::WindowsAndMessaging::{
-        FindWindowExW, GetClassNameW, GetClientRect, GetParent, GetWindowRect, IsIconic, IsZoomed, SetWindowPos, ShowWindow,
-        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SW_RESTORE,
-    },
+    UI::WindowsAndMessaging::{FindWindowExW, GetClassNameW, GetClientRect, GetParent, IsIconic, ShowWindow, SW_RESTORE},
 };
 
-use crate::config::{config, set_client, Client, DISPLAY_HEIGHT, DISPLAY_WIDTH};
-use crate::input::send_cancel_mode;
+use crate::config::{config, set_client, Client};
 use crate::logging::{debug_log, LogLevel, LogMode};
-use crate::notification::{display_notification, Notification, ResizeReason};
+use crate::notification::{display_notification, Notification};
 
 const WRAPPER_CLASS: &str = "HwndWrapper";
 const CROSVM_CLASS: &str = "CROSVM_1";
@@ -64,84 +60,12 @@ impl GameWindow {
         }
     }
 
-    pub fn resize(&self, current_w: u32, current_h: u32, target_w: u32, target_h: u32) {
-        send_cancel_mode(self.hwnd);
-
-        let target_hwnd = parent_or_self(self.hwnd);
-
-        let mut top_rect = RECT::default();
-        unsafe { _ = GetWindowRect(target_hwnd, &mut top_rect) };
-
-        let top_w = top_rect.right - top_rect.left;
-        let top_h = top_rect.bottom - top_rect.top;
-
-        let offset_w = top_w - current_w as i32;
-        let offset_h = top_h - current_h as i32;
-
-        // Restore if maximized
-        if unsafe { IsZoomed(target_hwnd).as_bool() } {
-            debug_log(LogLevel::Info, LogMode::Nested, "Resize: window is maximized, restoring");
-            unsafe { _ = ShowWindow(target_hwnd, SW_RESTORE) };
-            display_notification(Notification::WindowMaximizedRestored);
-            return;
-        }
-
-        let target_top_w = target_w as i32 + offset_w;
-        let target_top_h = target_h as i32 + offset_h;
-
-        if top_w == target_top_w && top_h == target_top_h {
-            return;
-        }
-
-        unsafe { _ = SetWindowPos(target_hwnd, None, 0, 0, target_top_w, target_top_h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) };
-
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Resize: adjusted to {}x{}", target_w, target_h));
-
-        let reason = if target_w > current_w { ResizeReason::TooSmall } else { ResizeReason::TooLarge };
-
-        display_notification(Notification::WindowAutoResized { prev_w: current_w, prev_h: current_h, target_w, target_h, reason });
-    }
-
     pub fn get_client_size(&self) -> (i32, i32) {
         let mut rect = RECT::default();
         if unsafe { GetClientRect(self.hwnd, &mut rect) }.is_ok() {
             (rect.right - rect.left, rect.bottom - rect.top)
         } else {
             (0, 0)
-        }
-    }
-
-    /// Notify on wrong aspect ratio, and force-resize when the window is too small or too large.
-    /// `log_*` = logical client size (for the ratio check), `phys_*` = physical client size (for the size thresholds).
-    pub(crate) fn validate_and_resize(&self, log_w: i32, log_h: i32, phys_w: u32, phys_h: u32) {
-        let height_ratio = log_h as f32 / (log_w as f32 / 16.0);
-        if (height_ratio - 9.0).abs() > 0.1 {
-            display_notification(Notification::WindowWrongRatio(height_ratio));
-            return;
-        }
-
-        // Force resize if too small
-        if phys_w < (DISPLAY_WIDTH as f32 * 0.9) as u32 || phys_h < (DISPLAY_HEIGHT as f32 * 0.9) as u32 {
-            let (target_w, target_h) = (DISPLAY_WIDTH, DISPLAY_HEIGHT);
-            self.resize(phys_w, phys_h, target_w, target_h);
-            return;
-        }
-
-        // Force resize if too large
-        if phys_w > (DISPLAY_WIDTH as f32 * 1.6) as u32 || phys_h > (DISPLAY_HEIGHT as f32 * 1.6) as u32 {
-            let (target_w, target_h) = ((DISPLAY_WIDTH as f32 * 1.5) as u32, (DISPLAY_HEIGHT as f32 * 1.5) as u32);
-            self.resize(phys_w, phys_h, target_w, target_h);
-        }
-    }
-
-    /// Restore from minimized, then apply the size policy.
-    /// Daemon is per-monitor DPI aware: get_client_size() is physical,
-    /// but the ratio check is scale-invariant so passing it as both logical/physical is fine.
-    pub fn normalize(&self) {
-        self.restore();
-        let (w, h) = self.get_client_size();
-        if w > 0 && h > 0 {
-            self.validate_and_resize(w, h, w as u32, h as u32);
         }
     }
 }
@@ -206,36 +130,6 @@ pub fn start_game_if_needed() {
     }
 }
 
-pub fn print_window_list() {
-    let windows = window_list().unwrap_or_default();
-    let mut max_hwnd_len = 4;
-    let mut max_class_len = 5;
-
-    let rows: Vec<_> = windows
-        .into_iter()
-        .map(|win| {
-            let hwnd = format!("{:?}", win.hwnd);
-            let class = get_window_class(HWND(win.hwnd as usize as *mut c_void))
-                .map(|mut c| {
-                    if let Some(pos) = c.find('[') {
-                        c.truncate(pos);
-                    }
-                    c.trim().to_string()
-                })
-                .unwrap_or_default();
-
-            max_hwnd_len = max_hwnd_len.max(hwnd.len());
-            max_class_len = max_class_len.max(class.len());
-            (hwnd, class, win.window_name)
-        })
-        .collect();
-
-    println!("{:<hw$}  {:<cl$}  TITLE", "HWND", "CLASS", hw = max_hwnd_len, cl = max_class_len);
-    for (hwnd, class, title) in rows {
-        println!("{:<hw$}  {:<cl$}  {}", hwnd, class, title, hw = max_hwnd_len, cl = max_class_len);
-    }
-}
-
 fn find_installed_package() -> Option<String> {
     let local_app_data = std::env::var("LOCALAPPDATA").ok()?;
     let cache_path = format!("{}/{}", local_app_data, CACHE_PATH);
@@ -286,7 +180,7 @@ fn find_crosvm_child(parent_hwnd: HWND) -> Option<HWND> {
 }
 
 fn is_loading_screen_active() -> bool {
-    window_list().unwrap().into_iter().any(|i| {
+    window_list().unwrap_or_default().into_iter().any(|i| {
         if i.window_name == LOADING_TITLE {
             let hwnd = HWND(i.hwnd as usize as *mut c_void);
             if let Some(class_name) = get_window_class(hwnd) {
@@ -306,5 +200,15 @@ fn get_window_class(hwnd: HWND) -> Option<String> {
         } else {
             None
         }
+    }
+}
+
+/// Bound-window log summary. client is the child's physical size the WGC frame pool binds to, so a change forces a rebind.
+pub(crate) fn describe_window(child: HWND, top: Option<HWND>) -> String {
+    let class = get_window_class(child).unwrap_or_default();
+    let (w, h) = GameWindow { hwnd: child }.get_client_size();
+    match top {
+        Some(t) => format!("top=0x{:X} child=0x{:X} class={} client={}x{}", t.0 as usize, child.0 as usize, class, w, h),
+        None => format!("child=0x{:X} class={} client={}x{}", child.0 as usize, class, w, h),
     }
 }
