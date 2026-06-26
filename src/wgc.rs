@@ -443,14 +443,22 @@ fn daemon_already_running() -> bool {
     }
 }
 
-fn build_capture_once() -> Option<WgcCapture> {
-    let w = GameWindow::find()?;
-    w.restore();
-    check_render_resolution();
-    let top = unsafe { GetAncestor(w.hwnd, GA_ROOT) };
-    let cap = WgcCapture::new(w.hwnd, top).ok()?;
-    debug_log(LogLevel::Info, LogMode::Event, &format!("WgcDaemon: bound {}", describe_window(w.hwnd, Some(top))));
-    Some(cap)
+// HWNDs and the COM handles inside WgcCapture aren't Send, but the daemon is MTA and the frame pool is free-threaded,
+// so building a session on a worker thread and handing it to the serve loop is sound — this wrapper carries it across.
+struct AssertSend<T>(T);
+unsafe impl<T> Send for AssertSend<T> {}
+
+// Building a capture is the daemon's one slow step, so it runs off the serve thread rather than stalling delivery
+// behind it; it reports back even on failure so the caller can clear its in-flight flag and retry.
+fn spawn_build(child: HWND, top: HWND, tx: mpsc::Sender<AssertSend<Option<WgcCapture>>>) {
+    let (child, top) = (child.0 as isize, top.0 as isize);
+    std::thread::spawn(move || {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+        let cap = WgcCapture::new(HWND(child as *mut core::ffi::c_void), HWND(top as *mut core::ffi::c_void)).ok();
+        let _ = tx.send(AssertSend(cap));
+    });
 }
 
 fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
@@ -523,8 +531,15 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     let _ = stream.write_all(&[delivered]);
 }
 
-/// One maintenance tick: re-verify the window and rebind/relaunch as needed; returns true when it's gone (exit).
-fn maintain(cap: &mut Option<WgcCapture>, last_relaunch: &mut Option<Instant>) -> bool {
+/// One maintenance tick: re-verify the window and kick off a rebind/relaunch as needed; returns true when it's gone (exit).
+/// The WgcCapture build runs on a worker (spawn_build); `building` guards against launching more than one at a time,
+/// and the old capture keeps serving until the new one lands.
+fn maintain(
+    cap: &mut Option<WgcCapture>,
+    last_relaunch: &mut Option<Instant>,
+    build_tx: &mpsc::Sender<AssertSend<Option<WgcCapture>>>,
+    building: &mut bool,
+) -> bool {
     // IsWindow stays true for a hidden-but-alive GPG tree; fresh frames are the real liveness signal.
     // While they flow reuse the cached child; once they stall past FRAME_STALE, re-verify via window.rs's title search.
     let w = match cap.as_ref() {
@@ -553,13 +568,10 @@ fn maintain(cap: &mut Option<WgcCapture>, last_relaunch: &mut Option<Instant>) -
                 .as_ref()
                 .map(|c| w.hwnd != c.child() || child_client_size(w.hwnd) != c.bound_client())
                 .unwrap_or(true);
-            if needs_rebind {
+            if needs_rebind && !*building {
+                *building = true;
                 let top = unsafe { GetAncestor(w.hwnd, GA_ROOT) };
-                if let Ok(c) = WgcCapture::new(w.hwnd, top) {
-                    debug_log(LogLevel::Info, LogMode::Event, &format!("WgcDaemon: rebound {}", describe_window(w.hwnd, Some(top))));
-                    check_render_resolution();
-                    *cap = Some(c);
-                }
+                spawn_build(w.hwnd, top, build_tx.clone());
             }
         }
     }
@@ -591,10 +603,10 @@ pub fn run_daemon() {
     let _ = set_registry(DAEMON_PORT_KEY, port as u32, REG_PATH_STATE);
     debug_log(LogLevel::Info, LogMode::End, &format!("WgcDaemon: started / awaiting handshake (127.0.0.1:{})", port));
 
-    let mut cap = build_capture_once();
-    if cap.is_none() {
-        debug_log(LogLevel::Warn, LogMode::Event, "WgcDaemon: window not found yet, serving black frames");
-    }
+    // A WgcCapture build is the serve loop's only blocking step, so it runs on a worker and returns over this channel.
+    let (build_tx, build_rx) = mpsc::channel::<AssertSend<Option<WgcCapture>>>();
+    let mut cap: Option<WgcCapture> = None;
+    let mut building = false;
 
     // Blocking accept on a dedicated thread feeding a channel: zero accept latency.
     let (tx, rx) = mpsc::channel::<TcpStream>();
@@ -615,6 +627,16 @@ pub fn run_daemon() {
     let mut last_maint = Instant::now();
     let mut last_relaunch: Option<Instant> = None;
     loop {
+        // Clear the flag on either outcome so a failed build is retried on the next tick, not left stuck.
+        if let Ok(AssertSend(built)) = build_rx.try_recv() {
+            building = false;
+            if let Some(c) = built {
+                debug_log(LogLevel::Info, LogMode::Event, &format!("WgcDaemon: bound {}", describe_window(c.child(), Some(c.top))));
+                check_render_resolution();
+                cap = Some(c);
+            }
+        }
+
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(stream) => {
                 handle_client(stream, cap.as_ref());
@@ -632,7 +654,7 @@ pub fn run_daemon() {
         // Runs outside the recv branch so maintenance still ticks while a busy MAA keeps recv_timeout returning Ok.
         if last_maint.elapsed() >= MAINTENANCE_INTERVAL {
             last_maint = Instant::now();
-            if maintain(&mut cap, &mut last_relaunch) {
+            if maintain(&mut cap, &mut last_relaunch, &build_tx, &mut building) {
                 break;
             }
         }
