@@ -60,8 +60,8 @@ impl Notification {
                 "스크린샷이 바탕화면에 저장됐어요".into(),
             ),
             Self::GpgShutdown => (
-                "Google Play Games has shut down".into(),
-                "Google Play Games가 종료됐어요".into(),
+                "Google Play Games shut down".into(),
+                "Google Play Games 종료".into(),
             ),
 
             Self::WindowMinimized => (
@@ -69,16 +69,16 @@ impl Notification {
                 "최소화된 창은 지원하지 않아요".into(),
             ),
             Self::WindowWrongRatio(r) => (
-                format!("Incorrect aspect ratio (16:{:.2})\nPlease set it to 16:9", r),
-                format!("화면 비율이 맞지 않아요 (16:{:.2})\n16:9 비율로 설정해주세요", r),
+                format!("The current aspect ratio is not supported\nCurrent 16:{:.2} / Recommended 16:9", r),
+                format!("현재 화면 비율은 지원하지 않아요\n현재 16:{:.2} / 권장 16:9", r),
             ),
             Self::InternalResolution { w, h } => (
-                format!("Google Play Games internal resolution is {}×{}\nRecommended: 1280×720", w, h),
-                format!("Google Play Games 내부 해상도 {}×{}\n권장 해상도 1280×720", w, h),
+                format!("The current resolution can cause issues\nCurrent {}×{} / Recommended 1280×720", w, h),
+                format!("현재 해상도는 문제가 생길 수 있어요\n현재 {}×{} / 권장 1280×720", w, h),
             ),
             Self::ScreenshotFailed => (
                 "Screenshot failed; window not found".into(),
-                "스크린샷 실패, 창을 찾을 수 없어요".into(),
+                "창을 찾을 수 없어 스크린샷에 실패했어요".into(),
             ),
             Self::UnknownCommand(c) => (
                 format!("Unknown command\n{}", c),
@@ -102,8 +102,8 @@ impl Notification {
                 format!("요청된 클라이언트와 설치된 클라이언트가 달라요\nMAA '실행 설정'에서 '클라이언트'를 확인해주세요\n요청됨: {}\n설치됨: {}", r, i),
             ),
             Self::AdbInputUnsupported => (
-                "ADB Input is no longer supported\nPlease switch to Minitouch".into(),
-                "ADB Input은 지원하지 않습니다\nMinitouch로 전환해주세요".into(),
+                "ADB Input is not supported\nPlease switch to Minitouch".into(),
+                "ADB Input은 지원하지 않아요\nMinitouch로 전환해주세요".into(),
             ),
             Self::MinitouchStopped => (
                 "Minitouch daemon stopped".into(),
@@ -134,7 +134,7 @@ impl Notification {
             LogLevel::Update => ("🎉 Update", "🎉 업데이트"),
             LogLevel::Info => ("ℹ️ Info", "ℹ️ 정보"),
             LogLevel::Warn => ("⚠️ Warning", "⚠️ 경고"),
-            LogLevel::Error => ("⛔ ERROR", "⛔ 오류"),
+            LogLevel::Error => ("⛔ Error", "⛔ 오류"),
         };
         if config().client == Client::KR { kr } else { en }.into()
     }
