@@ -479,7 +479,7 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     let frame = cap.and_then(|c| c.latest_display_rgba()).filter(|(_, age, _)| *age < FRAME_STALE);
 
     // port == 0 is the byte-return verb (fake nemu DLL): hand the RGBA frame to the caller instead of MAA's nc port.
-    // Response: [status: u8] then, if status==1, [w: u32 LE][h: u32 LE][rgba...].
+    // Response: [w: u32 LE][h: u32 LE][rgba...]; no fresh frame degrades to a black frame in the same format.
     if maa_port == 0 {
         match frame {
             Some((rgba, frame_age, crop_resize)) => {

@@ -99,7 +99,8 @@ fn parse_command(args: &[String]) -> Command {
     match full_command.as_str() {
         c if c.contains("connect") => Command::Connect,
         c if c.contains("am start -n") => Command::StartActivity { intent: args[6].clone() },
-        c if c.contains("shell echo") => Command::Echo { text: args.get(4..).map_or(String::new(), |s| s.join(" ")) }, // Connection Preset - Compatible Mode
+        // Connection Preset - Compatible Mode
+        c if c.contains("shell echo") => Command::Echo { text: args.get(4..).map_or(String::new(), |s| s.join(" ")) },
         c if c.contains("am force-stop") || c.contains("input keyevent HOME") => Command::ForceStop,
         c if c.contains("--touch-overlay") => Command::ToggleTouchOverlay,
 

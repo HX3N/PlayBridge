@@ -42,21 +42,28 @@ MAA (MaaAssistantArknights)
         TCP 127.0.0.1:<dport>     └──────────────┬───────────────────┘                      │
                                                  │ Windows Graphics Capture                 │
                                                  ▼                                          ▼
-                                        GPG top-level window  ◄──────────────────────  Win32 messages
-                                          └ CROSVM_1 child (Arknights render surface)
+                                        GPG top-level window                           Win32 messages
+                                          └ CROSVM_1 child (Arknights render surface)  ◄───┘
 ```
 
 Both screencap paths converge on the **single** WGC daemon: PlayExtras gets the frame returned over the same
 socket (byte-return verb), RawByNc has the daemon connect out to MAA's `nc` port. Input never goes through the
-DLL — the nemu input exports are stubs; real input is Win32 `PostMessage` from the bin or the minitouch daemon.
+DLL — the nemu input exports are stubs; real input is Win32 `PostMessage` to the CROSVM child, from the bin or
+the minitouch daemon.
 The resident minitouch daemon posts a `MinitouchStopped` toast when its stdin closes.
 
 Beyond connect/screencap, the bin handles a few one-shot ADB commands (`execute_command`):
 
-- `am force-stop` / `input keyevent HOME` → `WM_CLOSE` to the GPG window (`ForceStop`) + shutdown toast
+- `am start -n <intent>` → resolves the client from the intent package (`apply_intent_package`) and launches the
+  game if needed; a package that contradicts the configured client raises a `ClientMismatch` /
+  `UnsupportedClient` toast instead
+- `am force-stop` / `input keyevent HOME` → `WM_CLOSE` to the CROSVM child (`ForceStop`) + shutdown toast
+- `shell echo <text>` → echoes the text back (MAA's "Compatible Mode" connection preset)
 - `input tap` / `input swipe` → `AdbInputUnsupported` toast — raw ADB input is dropped, minitouch only
-- `input keyevent` (ESC) / `input text` → Win32 `PostMessage` to the window
+- `input keyevent` (ESC) / `input text` → Win32 `PostMessage` to the CROSVM child
 - `--touch-overlay` → toggles touch-path overlay capture (`TOUCH_OVERLAY`, see _Shared state_)
+- no arguments → saves a desktop PNG screenshot (`capture::screenshot`, the one remaining PrintWindow path) and
+  runs the update check
 
 ## Connect handshake (PlayExtras + Minitouch)
 
@@ -66,7 +73,7 @@ with whatever keeps MAA moving forward. Call stack on MAA's side:
 
 | #   | MAA ADB command                                                                | `main.rs` `Command`       | PlayBridge response / effect                                                  |
 | --- | ------------------------------------------------------------------------------ | ------------------------- | ----------------------------------------------------------------------------- |
-| 1   | `adb devices`                                                                  | `Devices`                 | prints `GooglePlayGames\tdevice`; runs version + update check                 |
+| 1   | `adb devices`                                                                  | `Devices`                 | prints `GooglePlayGames\tdevice` and a `PlayBridge <version>` line; runs update check                 |
 | 2   | `adb connect <addr>`                                                           | `Connect`                 | `connected to Google Play Games`                                              |
 | 3   | `settings get secure android_id`                                               | `GetUuid`                 | `0000000000000000`                                                            |
 | 4   | `getprop ro.build.version.release`                                             | `GetPropRelease`          | `14` (faked Android version)                                                  |
@@ -89,7 +96,7 @@ ignored so MAA falls back instead of showing an "unknown command" toast.
 
 | Mode                        | Trigger                                         | Path                                                                                                                    |
 | --------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| **PlayExtras** (MuMuExtras) | DLL `nemu_capture_display`                      | `lib.rs` → TCP `127.0.0.1:<dport>` with port==0 → daemon writes `[status][w][h][rgba]` back on the same socket          |
+| **PlayExtras** (MuMuExtras) | DLL `nemu_capture_display`                      | `lib.rs` → TCP `127.0.0.1:<dport>` with port==0 → daemon writes `[w: u32][h: u32][rgba]` back on the same socket          |
 | **RawByNc**                 | `exec-out screencap \| nc -w 3 10.0.2.2 <port>` | `main.rs ScreencapNc` → `deliver_via_daemon(port)` → daemon connects out to MAA's `nc` port and streams RGBA, then ACKs |
 | RawWithGzip                 | `exec-out screencap \| gzip -1`                 | `Ignore` (unsupported, silent)                                                                                          |
 | Encode                      | `exec-out screencap -p`                         | `Ignore` (unsupported, silent)                                                                                          |
@@ -97,9 +104,14 @@ ignored so MAA falls back instead of showing an "unknown command" toast.
 MAA applies `cvtColor(RGBA2BGR)` then `flip(.,0)` to PlayExtras frames, so the DLL writes the frame **bottom-up**
 to cancel that vertical flip (`nemu_capture_display`). RawByNc frames are sent top-down.
 
+With no fresh frame to serve (nothing captured yet, or the cached frame went stale), both verbs degrade to a
+black frame in the same format. If the daemon isn't running at all, `ScreencapNc` spawns it and answers that one
+request with a black frame itself; the next request hits the warm daemon.
+
 ## Benchmark one-shot
 
-`wm size` (#5) sets a one-shot `BENCHMARK` flag in the registry. While it is armed:
+`wm size` (#5; `dumpsys window displays` maps to the same handler) sets a one-shot `BENCHMARK` flag in the
+registry. While it is armed:
 
 - `main()` skips `ensure_game_ready()` (`peek_benchmark_mode`), so a ~1s game launch can't skew the timing.
 - the next RawByNc request returns a **black frame** immediately (`check_benchmark_mode` consumes the flag),
@@ -131,7 +143,14 @@ doesn't share the bin's modules) — **these must stay in sync with `config.rs` 
   port, then serves frames from a warm `WgcCapture` session on the GPG top-level window.
 - A dedicated accept thread feeds a channel for zero accept latency; the main loop also runs a **maintenance
   tick** every 200 ms (`maintain`) that restores/rebinds the window — fresh frames, not `IsWindow`, are the
-  liveness signal.
+  liveness signal (a cached frame older than 1 s counts as stale and is served as black).
+- **Rebinds build off the serve thread**: constructing a `WgcCapture` is the one slow step, so `spawn_build` runs
+  it on a worker (`building` guards against duplicates) and the old capture keeps serving until the new one lands.
+- While no window is bound (startup, or waiting out a game restart), the daemon **relaunches the game itself**
+  via `ensure_game_ready`, throttled to one attempt per 10 s.
+- On every (re)bind, `check_render_resolution` reads the per-package render resolution GPG keeps in `store.db`
+  (`src/store.rs`): a non-16:9 value raises a `WindowWrongRatio` toast, a 16:9 value other than 1280x720 raises
+  `InternalResolution` — once per value.
 - **Self-exits** on idle timeout (120 s) or when the window is truly gone, so a fresh daemon rebinds after the
   game relaunches. On exit it restores the window's default rounded corners, clears the port, and posts a
   `WgcDaemonStopped` toast.

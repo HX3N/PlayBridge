@@ -72,7 +72,7 @@ pub fn input_text(window: &GameWindow, text: &str) {
     }
 }
 
-// Skip the costly GameWindow::find() (window_list enumeration) while the cached handle is alive; re-enumerate only if it's gone.
+// GameWindow::find() re-enumerates every window, so the cached handle is reused while it stays alive.
 fn refresh_window(window: GameWindow, w_width: &mut i32, w_height: &mut i32) -> GameWindow {
     if unsafe { IsWindow(Some(window.hwnd)).as_bool() } {
         let (w, h) = window.get_client_size();

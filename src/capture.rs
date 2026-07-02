@@ -124,7 +124,7 @@ pub fn transmit_pixels_nc(pixels: Vec<u8>, port: u16) {
     buffer.extend_from_slice(&1u32.to_le_bytes());
     buffer.extend_from_slice(&pixels);
 
-    // Ensure last alpha byte is 0xFF for MAA validation
+    // MAA's frame validation requires the last alpha byte to be 0xFF.
     if let Some(last) = buffer.last_mut() {
         *last = 0xFF;
     }
@@ -134,7 +134,7 @@ pub fn transmit_pixels_nc(pixels: Vec<u8>, port: u16) {
         return;
     }
 
-    // Send FIN and wait for MAA to close the connection before process exit
+    // Half-close, then linger on a short read so MAA drains the frame before process exit resets the socket.
     let _ = stream.shutdown(Shutdown::Write);
     let _ = stream.set_read_timeout(Some(Duration::from_millis(TCP_TIMEOUT_MS)));
     let mut dump = [0; 1];
