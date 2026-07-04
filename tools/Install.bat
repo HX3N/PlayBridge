@@ -6,7 +6,9 @@ title PlayBridge / PlayExtras Installer
 rem Run this from the folder where MAA.exe is located.
 rem MAA.exe가 있는 폴더에서 실행하세요.
 
-set "ROOT=%~dp0"
+rem Setup.bat passes the MAA folder as arg 1; fall back to our own folder when
+rem this engine is run directly.
+if "%~1"=="" ( set "ROOT=%~dp0" ) else ( set "ROOT=%~1" )
 set "EXE_DST=%ROOT%PlayBridgeADB.exe"
 set "EXTRAS=%ROOT%PlayExtras"
 set "DLL_DIR=%EXTRAS%\nx_device\15.0\shell\sdk"
@@ -54,26 +56,47 @@ echo    - Enable MuMu screenshot enhancement : ON
 echo    - MuMu emulator path                 : %EXTRAS% or PlayExtras (rel path)
 echo ------------------------------------------------------------
 echo.
-echo  위 설정을 마쳤으면 Enter를 눌러 설치를 시작하세요.
+echo  [!] 설치 전 이 폴더의 MAA를 미리 종료하는 것을 권장합니다.
+echo      아직 열려 있으면 설치를 위해 강제로 종료됩니다.
 echo.
-echo  Once the settings above are done, press Enter to start.
+echo  [!] Please close MAA in this folder before installing.
+echo      If it is still open, it will be force-closed to install.
+echo ------------------------------------------------------------
+echo.
+echo  준비되었으면 Enter를 눌러 설치를 시작하세요.
+echo.
+echo  When ready, press Enter to start.
 pause >nul
 echo.
 
-rem --- 점유 검사: 다운로드 전에 파일이 잠겨 있는지 먼저 확인 ---
-rem --- Lock check: make sure the targets are free before downloading ---
-:checklocks
+rem --- 강제 종료: 이 폴더의 MAA/PlayBridge만 종료 후 설치 ---
+rem --- Force close: only the MAA/PlayBridge running from THIS folder ---
+echo 이 폴더의 MAA/PlayBridge 프로세스를 종료하는 중...
+echo.
+echo Closing MAA/PlayBridge from this folder...
+echo.
+call :killhere
+timeout /t 1 /nobreak >nul
+
 set "LOCKED="
 call :islocked "%EXE_DST%" || set "LOCKED=1"
 call :islocked "%DLL_DST%" || set "LOCKED=1"
-if defined LOCKED (
-    echo [!] MAA가 실행 중이라 파일을 교체할 수 없습니다. MAA를 완전히 종료한 뒤 Enter를 누르세요.
-    echo.
-    echo [!] MAA is running and locking the files. Fully close MAA, then press Enter.
-    pause >nul
-    echo.
-    goto checklocks
-)
+if not defined LOCKED goto download
+
+rem Still locked: one more forceful attempt before giving up.
+call :killhere
+timeout /t 2 /nobreak >nul
+set "LOCKED="
+call :islocked "%EXE_DST%" || set "LOCKED=1"
+call :islocked "%DLL_DST%" || set "LOCKED=1"
+if not defined LOCKED goto download
+
+echo [!] 파일이 여전히 잠겨 있습니다. MAA를 수동으로 종료한 뒤 다시 실행하세요.
+echo.
+echo [!] The files are still locked. Close MAA manually and run again.
+goto fail
+
+:download
 
 rem --- 다운로드 / Download ---
 echo 최신 릴리스에서 다운로드 중...
@@ -137,6 +160,12 @@ del "%TMP_EXE%" 2>nul
 del "%TMP_DLL%" 2>nul
 pause
 exit /b 1
+
+rem killhere  ->  stop MAA/PlayBridge whose exe lives in %ROOT% only.
+rem Matching the full path leaves other-folder instances running (multi-instance users).
+:killhere
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -ieq '%EXE_DST%' -or $_.Path -ieq '%ROOT%MAA.exe' } | Stop-Process -Force -ErrorAction SilentlyContinue" >nul 2>nul
+exit /b 0
 
 rem islocked "<file>"  ->  exit /b 1 if the file exists and is locked, else 0
 :islocked

@@ -13,7 +13,7 @@
 > 문제가 있을 경우 MAA의 도구 탭에서 **`Peep`** 기능을 사용해 확인하세요.<br>
 > 첫 실행 시 `로그인` 기능을 활성화하는 것을 권장합니다.
 
-1. **[`Install.bat`](https://github.com/HX3N/PlayBridge/releases/latest)** 을 다운로드하여 MAA 폴더에서 실행하세요. 최신 `PlayBridgeADB.exe`와 `external_renderer_ipc.dll`을 자동으로 다운로드하고 배치합니다 (DLL을 위해 `PlayExtras\nx_device\15.0\shell\sdk\` 폴더를 생성합니다).
+1. **[`Setup.bat`](https://github.com/HX3N/PlayBridge/releases/latest)** 을 다운로드하여 MAA 폴더에서 실행하세요. 이 스크립트가 `PlayBridgeADB.exe`와 `external_renderer_ipc.dll`을 자동으로 다운로드하고 배치합니다 (DLL을 위해 `PlayExtras\nx_device\15.0\shell\sdk\` 폴더를 생성합니다).
 2. **MAA > 설정 > 연결**로 이동하여 아래와 같이 설정하세요:
 
 <div align="center">

@@ -60,7 +60,7 @@ jobs:
           files: |
             target/release/PlayBridgeADB.exe
             target/release/external_renderer_ipc.dll
-            tools/Install.bat
+            tools/Setup.bat
 
           generate_release_notes: true
           draft: false

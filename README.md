@@ -13,7 +13,7 @@
 > To check for any issues, use the **`Peep`** feature in MAA's Toolbox tab.<br>
 > Recommended to enable `Login` feature on the first launch.
 
-1. Download **[`Install.bat`](https://github.com/HX3N/PlayBridge/releases/latest)** and run it from your MAA folder. It downloads the latest `PlayBridgeADB.exe` and `external_renderer_ipc.dll` and places them automatically (creating `PlayExtras\nx_device\15.0\shell\sdk\` for the DLL).
+1. Download **[`Setup.bat`](https://github.com/HX3N/PlayBridge/releases/latest)** and run it from your MAA folder. It downloads `PlayBridgeADB.exe` and `external_renderer_ipc.dll` and places them automatically (creating `PlayExtras\nx_device\15.0\shell\sdk\` for the DLL).
 2. Then, go to **MAA > Settings > Connection** and configure as follows:
 
 <div align="center">
