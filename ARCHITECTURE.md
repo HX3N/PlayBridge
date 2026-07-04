@@ -73,7 +73,7 @@ with whatever keeps MAA moving forward. Call stack on MAA's side:
 
 | #   | MAA ADB command                                                                | `main.rs` `Command`       | PlayBridge response / effect                                                  |
 | --- | ------------------------------------------------------------------------------ | ------------------------- | ----------------------------------------------------------------------------- |
-| 1   | `adb devices`                                                                  | `Devices`                 | prints `GooglePlayGames\tdevice` and a `PlayBridge <version>` line; runs update check                 |
+| 1   | `adb devices`                                                                  | `Devices`                 | prints `127.0.0.1:7777\tdevice` and a `PlayBridge <version>` line; runs update check                 |
 | 2   | `adb connect <addr>`                                                           | `Connect`                 | `connected to Google Play Games`                                              |
 | 3   | `settings get secure android_id`                                               | `GetUuid`                 | `0000000000000000`                                                            |
 | 4   | `getprop ro.build.version.release`                                             | `GetPropRelease`          | `14` (faked Android version)                                                  |

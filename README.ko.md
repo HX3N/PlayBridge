@@ -22,7 +22,7 @@
 
 | ADB 경로          | 연결 주소       | 연결 프리셋     | 터치 모드 | MuMu 설치 경로 | 스크린샷 향상 모드 |
 | ----------------- | --------------- | --------------- | --------- | -------------- | ------------------ |
-| PlayBridgeADB.exe | GooglePlayGames | MuMu 에뮬레이터 | Minitouch | `PlayExtras`   | 활성화             |
+| PlayBridgeADB.exe | 127.0.0.1:7777  | MuMu 에뮬레이터 | Minitouch | `PlayExtras`   | 활성화             |
 
 </div>
 
@@ -51,6 +51,6 @@ PlayExtras는 MAA의 **MumuExtras** 흐름을 모방합니다. MAA가 벤더 `ex
 
 | ADB 경로      | 연결 주소       | 연결 프리셋 | 터치 모드 |
 | ------------- | --------------- | ----------- | --------- |
-| PlayBridgeADB | GooglePlayGames | 일반 모드   | Minitouch |
+| PlayBridgeADB | 127.0.0.1:7777  | 일반 모드   | Minitouch |
 
 </div>

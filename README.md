@@ -22,7 +22,7 @@
 
 | ADB path          | Connection address | Connection Preset | Touch Mode | MuMu Installation Path | Screenshot enhancement mode |
 | ----------------- | ------------------ | ----------------- | ---------- | ---------------------- | --------------------------- |
-| PlayBridgeADB.exe | GooglePlayGames    | MuMu Emulator     | Minitouch  | `PlayExtras`           | Enabled                     |
+| PlayBridgeADB.exe | 127.0.0.1:7777     | MuMu Emulator     | Minitouch  | `PlayExtras`           | Enabled                     |
 
 </div>
 
@@ -51,6 +51,6 @@ Download [PlayBridgeADB](https://github.com/HX3N/PlayBridge/releases/latest) and
 
 | ADB path      | Connection address | Connection Preset | Touch Mode |
 | ------------- | ------------------ | ----------------- | ---------- |
-| PlayBridgeADB | GooglePlayGames    | General Mode      | Minitouch  |
+| PlayBridgeADB | 127.0.0.1:7777     | General Mode      | Minitouch  |
 
 </div>

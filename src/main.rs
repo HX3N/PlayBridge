@@ -178,8 +178,9 @@ fn execute_command(command: Command) {
             set_benchmark_mode();
         }
         Command::Devices => {
+            // Must be host:port with a port get_mumu_index() accepts (7555, >=16384, or >=5555), or MAA skips MumuExtras.
             println!("List of devices attached");
-            println!("GooglePlayGames\tdevice");
+            println!("127.0.0.1:7777\tdevice");
 
             check_version();
             check_for_update();
