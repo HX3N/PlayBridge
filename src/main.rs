@@ -71,6 +71,7 @@ enum Command {
     Devices,
     GetPropRelease,
     GetUuid,
+    Fps,
 
     // [Screen Capture]
     ScreencapNc { port: u16 },
@@ -108,6 +109,7 @@ fn parse_command(args: &[String]) -> Command {
         c if c.contains("devices") => Command::Devices,
         c if c.contains("getprop ro.build.version.release") => Command::GetPropRelease,
         c if c.contains("settings get secure android_id") => Command::GetUuid,
+        c if c.contains("dumpsys SurfaceFlinger") => Command::Fps,
 
         c if c.contains("exec-out screencap | nc -w 3 10.0.2.2") => Command::ScreencapNc { port: args[9].parse().unwrap_or(0) },
 
@@ -187,6 +189,10 @@ fn execute_command(command: Command) {
         }
         Command::GetUuid => {
             println!("0000000000000000");
+        }
+        Command::Fps => {
+            // 60fps frame period in ns, the value MAA's fps probe reads as the first SurfaceFlinger --latency line.
+            println!("16666666");
         }
 
         Command::ScreencapNc { port } => {
