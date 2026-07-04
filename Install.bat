@@ -40,7 +40,7 @@ echo ------------------------------------------------------------
 echo  설치 전에 MAA 설정을 아래와 같이 맞춰 주세요:
 echo.
 echo    - 연결 프리셋                    : MuMu Player
-echo    - 연결 주소                      : GooglePlayGames
+echo    - 연결 주소                      : 127.0.0.1:7777
 echo    - ADB 경로                       : PlayBridgeADB.exe
 echo    - MuMu 스크린샷 강화 기능 활성화 : 체크
 echo    - MuMu 에뮬레이터 경로           : %EXTRAS% 또는 PlayExtras (상대 경로)
@@ -48,7 +48,7 @@ echo ------------------------------------------------------------
 echo  Before installing, set your MAA settings as follows:
 echo.
 echo    - Connection preset                  : MuMu Player
-echo    - Connection address                 : GooglePlayGames
+echo    - Connection address                 : 127.0.0.1:7777
 echo    - ADB path                           : PlayBridgeADB.exe
 echo    - Enable MuMu screenshot enhancement : ON
 echo    - MuMu emulator path                 : %EXTRAS% or PlayExtras (rel path)
