@@ -22,7 +22,7 @@
 
 | ADB path          | Connection address | Connection Preset | Touch Mode | MuMu Installation Path | Screenshot enhancement mode |
 | ----------------- | ------------------ | ----------------- | ---------- | ---------------------- | --------------------------- |
-| PlayBridgeADB.exe | GooglePlayGames    | MuMu Emulator     | Minitouch  | `PlayExtras`           | Enabled                     |
+| PlayBridgeADB.exe | 127.0.0.1:6000     | MuMu Emulator     | Minitouch  | `PlayExtras`           | Enabled                     |
 
 </div>
 
@@ -37,20 +37,3 @@ PlayExtras impersonates MAA's **MumuExtras** flow: MAA loads a vendor `external_
 
 Running `PlayBridgeADB` directly captures a screenshot of **Google Play Games** and saves it to the Desktop.<br>
 Add `--touch-overlay` to toggle the touch-path overlay capture, which saves each minitouch tap/swipe drawn over the frame for verification (or edit the registry value at `Software\PlayBridge\config\TOUCH_OVERLAY`).
-
-## RawByNc (legacy)
-
-> [!WARNING]
-> Not recommended — slower than PlayExtras. Use it only if PlayExtras can't run.
-
-Download [PlayBridgeADB](https://github.com/HX3N/PlayBridge/releases/latest) and place it inside the MAA folder, then configure:
-
-<div align="center">
-
-![img](./assets/RawByNc.png)
-
-| ADB path      | Connection address | Connection Preset | Touch Mode |
-| ------------- | ------------------ | ----------------- | ---------- |
-| PlayBridgeADB | GooglePlayGames    | General Mode      | Minitouch  |
-
-</div>

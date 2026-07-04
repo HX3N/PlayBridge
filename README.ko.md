@@ -20,9 +20,9 @@
 
 ![img](./assets/PlayExtras.png)
 
-| ADB 경로          | 연결 주소       | 연결 프리셋     | 터치 모드 | MuMu 설치 경로 | 스크린샷 향상 모드 |
-| ----------------- | --------------- | --------------- | --------- | -------------- | ------------------ |
-| PlayBridgeADB.exe | GooglePlayGames | MuMu 에뮬레이터 | Minitouch | `PlayExtras`   | 활성화             |
+| ADB 경로          | 연결 주소      | 연결 프리셋     | 터치 모드 | MuMu 설치 경로 | 스크린샷 향상 모드 |
+| ----------------- | -------------- | --------------- | --------- | -------------- | ------------------ |
+| PlayBridgeADB.exe | 127.0.0.1:6000 | MuMu 에뮬레이터 | Minitouch | `PlayExtras`   | 활성화             |
 
 </div>
 
@@ -37,20 +37,3 @@ PlayExtras는 MAA의 **MumuExtras** 흐름을 모방합니다. MAA가 벤더 `ex
 
 `PlayBridgeADB`를 직접 실행하면 **Google Play Games**의 스크린샷을 캡처하여 바탕화면에 저장합니다.<br>
 `--touch-overlay`를 붙이면 터치 경로 오버레이 캡처를 토글합니다. 각 minitouch 탭/스와이프 경로를 프레임 위에 그려 저장해 검증할 수 있습니다 (또는 레지스트리 값 `Software\PlayBridge\config\TOUCH_OVERLAY`를 직접 수정).
-
-## RawByNc (레거시)
-
-> [!WARNING]
-> 비권장 — PlayExtras보다 느립니다. PlayExtras를 사용할 수 없는 경우에만 사용하세요.
-
-[PlayBridgeADB](https://github.com/HX3N/PlayBridge/releases/latest)를 다운로드하여 MAA 폴더 안에 배치한 후 아래와 같이 설정하세요:
-
-<div align="center">
-
-![img](./assets/RawByNc.png)
-
-| ADB 경로      | 연결 주소       | 연결 프리셋 | 터치 모드 |
-| ------------- | --------------- | ----------- | --------- |
-| PlayBridgeADB | GooglePlayGames | 일반 모드   | Minitouch |
-
-</div>
