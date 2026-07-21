@@ -3,7 +3,8 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     panic,
-    path::PathBuf,
+    path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 use chrono::Local;
@@ -26,16 +27,26 @@ pub enum LogMode {
     End,
 }
 
-pub fn get_debug_folder() -> PathBuf {
-    let exe_dir = env::current_exe().unwrap().parent().unwrap().to_path_buf();
-    let folder_path = exe_dir.join("debug");
-    let _ = std::fs::create_dir_all(&folder_path);
-    folder_path
+// Resolved once per process, so a per-line exe lookup and directory create are not paid on every log.
+// Trade-off: a folder deleted mid-run is not recreated, and logging goes quiet until restart.
+static DEBUG_FOLDER: OnceLock<PathBuf> = OnceLock::new();
+static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn get_debug_folder() -> &'static Path {
+    DEBUG_FOLDER.get_or_init(|| {
+        let exe_dir = env::current_exe().unwrap().parent().unwrap().to_path_buf();
+        let folder_path = exe_dir.join("debug");
+        let _ = fs::create_dir_all(&folder_path);
+        folder_path
+    })
+}
+
+fn log_path() -> &'static Path {
+    LOG_PATH.get_or_init(|| get_debug_folder().join("PlayBridge.log"))
 }
 
 pub fn debug_log(level: LogLevel, mode: LogMode, message: &str) {
-    let log_path = get_debug_folder().join("PlayBridge.log");
-    let Ok(mut file) = OpenOptions::new().append(true).create(true).open(log_path) else {
+    let Ok(mut file) = OpenOptions::new().append(true).create(true).open(log_path()) else {
         return;
     };
 
@@ -80,13 +91,13 @@ const MAX_LOG_FILE_SIZE: u64 = 1024 * 1024;
 const BACKUP_LOG_NAME: &str = "PlayBridge.bak.log";
 
 pub fn rotate_log() {
-    let log_path = get_debug_folder().join("PlayBridge.log");
+    let log_path = log_path();
 
-    if let Ok(metadata) = fs::metadata(&log_path) {
+    if let Ok(metadata) = fs::metadata(log_path) {
         if metadata.len() >= MAX_LOG_FILE_SIZE {
             let backup_path = get_debug_folder().join(BACKUP_LOG_NAME);
 
-            if let Err(e) = fs::rename(&log_path, &backup_path) {
+            if let Err(e) = fs::rename(log_path, &backup_path) {
                 debug_log(LogLevel::Error, LogMode::Start, &format!("Failed to rotate log: {}", e));
             }
         }

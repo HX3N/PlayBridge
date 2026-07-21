@@ -1,14 +1,13 @@
 //! Read the currently-selected GPG render resolution from store.db.
 //!
-//! GPG stores the "screen resolution" setting in
-//!   %LOCALAPPDATA%\Google\Play Games\store.db   (SQLite, table UserSettingsState, BLOB = protobuf).
-//! Per-package the resolution lives at protobuf path .3.1.5 : field 1 = max option, field 2 = current selection,
-//! each a sub-message { 1: width, 2: height }.
+//! %LOCALAPPDATA%\Google\Play Games\store.db — SQLite, table UserSettingsState, BLOB = protobuf.
+//! Resolution path per package: .3.1.5 field 2 (current) = { 1: width, 2: height }; field 1 is the max option.
 //!
-//! No SQLite/protobuf crate is needed: the BLOB is stored contiguously, so we read the raw bytes (shared read works
-//! while GPG holds the file) and walk the wire format for the resolution groups. The value is the resolution the game
-//! content is rendered at, which tracks the monitor's aspect ratio — a non-16:9 monitor yields non-16:9 values here,
-//! so it is the source of truth for the window aspect-ratio check.
+//! The BLOB is stored contiguously and GPG's own handle allows a shared read, so the raw bytes can be
+//! read and walked while GPG is running.
+//!
+//! This is the resolution the game content renders at, so it tracks the monitor's aspect ratio and is the
+//! source of truth for the window ratio check.
 
 use std::path::PathBuf;
 
@@ -29,8 +28,7 @@ struct Entry {
     cur: (u32, u32),
 }
 
-// Scan the raw file for resolution groups (protobuf field 5, tag 0x2A) and pair each with the nearest preceding
-// package string. The structured parse plus the plausibility bound make false positives effectively impossible.
+// Each resolution group is paired with the nearest preceding package string.
 fn scan(buf: &[u8]) -> Vec<Entry> {
     let pkgs = find_packages(buf);
     let mut out = Vec::new();
@@ -100,7 +98,7 @@ fn parse_wh(sub: &[u8]) -> Option<(u32, u32)> {
     Some((w?, h?))
 }
 
-// Advance past one non-target field; length-delimited bytes are bounds-checked so a truncated BLOB fails the parse.
+// Length-delimited bytes are bounds-checked so a truncated BLOB fails the parse.
 fn skip_wire(buf: &[u8], pos: &mut usize, wire: u8) -> Option<()> {
     match wire {
         0 => {
@@ -147,7 +145,6 @@ fn plausible(w: u32, h: u32) -> bool {
     (200..=10000).contains(&w) && (200..=10000).contains(&h)
 }
 
-// Collect (offset, package) for every "com.…"-style id embedded in the BLOB.
 fn find_packages(buf: &[u8]) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     let mut i = 0usize;

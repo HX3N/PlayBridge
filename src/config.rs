@@ -1,5 +1,5 @@
 use chrono::Utc;
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{LazyLock, RwLock};
 use winreg::{
     enums::*,
     types::{FromRegValue, ToRegValue},
@@ -71,7 +71,6 @@ impl Client {
 }
 
 pub struct Config {
-    // Touch-path overlay capture toggle (registry TOUCH_OVERLAY); see capture::capture_touch_overlay.
     pub touch_overlay: bool,
     pub client: Client,
 }
@@ -93,7 +92,7 @@ impl Config {
     }
 }
 
-pub static CONFIG: LazyLock<Arc<RwLock<Config>>> = LazyLock::new(|| Arc::new(RwLock::new(Config::default())));
+static CONFIG: LazyLock<RwLock<Config>> = LazyLock::new(|| RwLock::new(Config::default()));
 
 pub fn config() -> std::sync::RwLockReadGuard<'static, Config> {
     CONFIG.read().unwrap()
@@ -199,14 +198,12 @@ pub fn toggle_touch_overlay() {
     toggle_config("TOUCH_OVERLAY");
 }
 
-/// Read a value from an HKCU subkey, returning `default` when the subkey or value is absent.
 pub fn get_registry<T: FromRegValue>(key_name: &str, default: T, path: &str) -> T {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     hkcu.open_subkey(path).and_then(|key| key.get_value(key_name)).unwrap_or(default)
 }
 
 /// Write a value to an HKCU subkey, creating it if needed.
-/// Generic over the value type so dword and string keys share one write path.
 pub fn set_registry<T: ToRegValue>(key_name: &str, value: T, path: &str) -> std::io::Result<()> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu.create_subkey(path)?;

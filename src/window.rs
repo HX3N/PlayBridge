@@ -156,7 +156,6 @@ fn match_window_by_title(windows: &[HwndName], title: &str) -> Option<HWND> {
         let hwnd = HWND(win.hwnd as usize as *mut c_void);
         let class_name = get_window_class(hwnd)?;
 
-        // Google Play Games window structure has been updated
         // Old: CROSVM_1 > subWin
         // New: HwndWrapper > CROSVM_1 > subWin
         if class_name == CROSVM_CLASS {

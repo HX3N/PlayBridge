@@ -1,7 +1,9 @@
 // Windows Graphics Capture screencap: a persistent daemon plus thin per-call clients.
 // The daemon holds a warm WGC session on the top-level GPG window, caches the latest frame, and crops/resizes on demand.
-// WGC captures occluded windows continuously on the GPU, so a frame is always ready (~7ms) — no synchronous PrintWindow readback.
+// WGC keeps compositing occluded windows on the GPU, so a frame is always ready (~7ms)
+// and no request pays for a synchronous PrintWindow readback.
 
+use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::windows::process::CommandExt;
@@ -35,7 +37,7 @@ use windows::Win32::System::WinRT::Direct3D11::{CreateDirect3D11DeviceFromDXGIDe
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetClientRect, IsWindow, GA_ROOT};
 
-use crate::capture::{resize_to_display, transmit_pixels_nc};
+use crate::capture::{black_frame_pixels, resize_to_display, transmit_pixels_nc};
 use crate::config::{config, get_registry, set_registry, DISPLAY_HEIGHT, DISPLAY_WIDTH, REG_PATH_STATE};
 use crate::logging::{debug_log, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification};
@@ -58,7 +60,6 @@ const IPC_ACK_TIMEOUT_MS: u64 = 3000;
 // Render resolution last checked, keyed by value so a mid-session change re-fires; daemon-lifetime memory only.
 static RES_CHECK: Mutex<Option<(u32, u32)>> = Mutex::new(None);
 
-// Aspect-ratio / resolution check against store.db, run once per value at (re)bind.
 // Ratio gates: a non-16:9 render is distorted, so it stops there rather than also flagging the resolution.
 fn check_render_resolution() {
     let package = config().client.package();
@@ -86,10 +87,6 @@ fn check_render_resolution() {
     if (w, h) != (DISPLAY_WIDTH, DISPLAY_HEIGHT) {
         display_notification(Notification::InternalResolution { w, h });
     }
-}
-
-fn black_frame_rgba() -> Vec<u8> {
-    vec![0u8; (DISPLAY_WIDTH * DISPLAY_HEIGHT * 4) as usize]
 }
 
 fn write_extras_frame(stream: &mut TcpStream, rgba: &[u8]) {
@@ -133,7 +130,6 @@ fn create_item(hwnd: HWND) -> windows::core::Result<GraphicsCaptureItem> {
     unsafe { interop.CreateForWindow(hwnd) }
 }
 
-// Reused across FrameArrived callbacks: staging texture + output buffer.
 // Avoids a driver allocation and an ~8MB heap alloc on every captured frame.
 #[derive(Default)]
 struct FrameWork {
@@ -159,7 +155,6 @@ fn create_staging(device: &ID3D11Device, desc: &D3D11_TEXTURE2D_DESC) -> windows
     Ok(staging.unwrap())
 }
 
-// Reuses the staging texture and refills `out` in place to avoid per-frame allocations.
 fn process_frame(
     device: &ID3D11Device,
     context: &ID3D11DeviceContext,
@@ -174,7 +169,6 @@ fn process_frame(
     let mut desc = D3D11_TEXTURE2D_DESC::default();
     unsafe { texture.GetDesc(&mut desc) };
 
-    // Reuse the staging texture unless size/format changed (constant per session).
     let recreate = match staging_cache {
         Some(s) => {
             let mut sd = D3D11_TEXTURE2D_DESC::default();
@@ -215,7 +209,6 @@ fn process_frame(
     Ok((desc.Width, desc.Height))
 }
 
-// Crop geometry for the CROSVM child within the top-level's DWM frame bounds.
 // Pure Win32 queries (no frame buffer), so it can run outside the frame lock.
 fn crop_geometry(top: HWND, child: HWND) -> Option<(i32, i32, i32, i32)> {
     let mut bounds = RECT::default();
@@ -244,30 +237,32 @@ fn crop_geometry(top: HWND, child: HWND) -> Option<(i32, i32, i32, i32)> {
     Some((cx, cy, cw, ch))
 }
 
-// Fill strategy for the padded edge.
-#[derive(Clone, Copy)]
-#[allow(dead_code)]
-enum EdgeFill {
-    Black,
-    Replicate,
+// Crop destination, reused so a multi-megabyte buffer isn't allocated and zeroed per request.
+// The daemon serves from one thread, matching capture.rs's RESIZER.
+thread_local! {
+    static CROP_BUF: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
-
-// Resizing softens the edge regardless, so replicating the last opaque pixel is the cleanest fill.
-const EDGE_FILL: EdgeFill = EdgeFill::Replicate;
 
 // DWM skips the right/bottom ~3px, so that edge arrives transparent and unrecoverable.
 // A buffer clamped to the captured size resizes at the wrong scale and pushes the UI bottom-right, so it stays full cw x ch.
-// The alpha walk finds the opaque extent (ox, oy); `fill` covers the transparent rest.
+// The alpha walk finds the opaque extent (ox, oy); the padded rest replicates the last opaque pixel,
+// which resizing softens anyway.
+//
+// The padded area is two rectangles, so it is filled as two rectangles rather than by testing every pixel.
 //
 //   out = cw x ch (full, never clamped):
 //   x=0          ox          cw
-//   +------------+-----------+ y=0      opaque: x < ox && y < oy  -> real content, kept
-//   |  opaque    |   fill    |          fill:   x >= ox || y >= oy -> padded edge,
-//   |  ox x oy   |           |                  replicate the last opaque pixel (or black)
-// oy+------------+           |
-//   |          fill          |          ox,oy sit just inside the copied area (avail_w/avail_h);
+//   +------------+-----------+ y=0      opaque: x < ox && y < oy -> real content, kept
+//   |  opaque    |   right   |          right strip:  each row repeats its own pixel at ox-1
+//   |  ox x oy   |   strip   |          bottom strip: every row equals row oy-1, so copy it wholesale
+// oy+------------+-----------+
+//   |      bottom strip      |          ox,oy sit just inside the copied area (avail_w/avail_h);
 //   +------------------------+ ch       the gap between them is DWM's transparent ~3px.
-fn crop_region(frame: &[u8], fw: u32, fh: u32, rect: (i32, i32, i32, i32), fill: EdgeFill) -> Option<(Vec<u8>, u32, u32)> {
+//
+// `out` is caller-owned and reused across requests, so it is only resized, never re-zeroed.
+// Every byte outside the copied area must be written before returning — the strip fills cover it,
+// and the degenerate path zeroes it explicitly — or leftovers from the previous frame would leak.
+fn crop_region(frame: &[u8], fw: u32, fh: u32, rect: (i32, i32, i32, i32), out: &mut Vec<u8>) -> Option<(u32, u32)> {
     let (cx, cy, cw, ch) = rect;
     if cw <= 0 || ch <= 0 || cx < 0 || cy < 0 {
         return None;
@@ -280,14 +275,14 @@ fn crop_region(frame: &[u8], fw: u32, fh: u32, rect: (i32, i32, i32, i32), fill:
     }
 
     let copy = (avail_w * 4) as usize;
-    let mut out = vec![0u8; (cw * ch * 4) as usize];
+    let stride = (cw * 4) as usize;
+    out.resize((cw * ch * 4) as usize, 0);
     for y in 0..avail_h {
         let s = (((cy as u32 + y) * fw + cx as u32) * 4) as usize;
         let d = (y * cw * 4) as usize;
         out[d..d + copy].copy_from_slice(&frame[s..s + copy]);
     }
 
-    // Find the opaque right/bottom extent by walking inward while alpha < 255.
     let alpha = |x: u32, y: u32| out[((y * cw + x) * 4 + 3) as usize];
     let mut ox = avail_w;
     while ox > 0 && alpha(ox - 1, avail_h / 2) < 255 {
@@ -298,26 +293,33 @@ fn crop_region(frame: &[u8], fw: u32, fh: u32, rect: (i32, i32, i32, i32), fill:
         oy -= 1;
     }
     if ox == 0 || oy == 0 {
-        return Some((out, cw, ch)); // degenerate; leave as copied
+        // Degenerate (fully transparent): keep the copied area, but zero the padding the
+        // strip fills below would have covered — resize() left previous-frame bytes there.
+        for y in 0..avail_h as usize {
+            out[y * stride + copy..(y + 1) * stride].fill(0);
+        }
+        out[avail_h as usize * stride..].fill(0);
+        return Some((cw, ch));
     }
 
-    for y in 0..ch {
-        for x in 0..cw {
-            if x < ox && y < oy {
-                continue; // keep opaque content
-            }
-            let d = ((y * cw + x) * 4) as usize;
-            match fill {
-                EdgeFill::Black => out[d..d + 4].copy_from_slice(&[0, 0, 0, 255]),
-                EdgeFill::Replicate => {
-                    let s = ((y.min(oy - 1) * cw + x.min(ox - 1)) * 4) as usize;
-                    let p = [out[s], out[s + 1], out[s + 2], out[s + 3]];
-                    out[d..d + 4].copy_from_slice(&p);
-                }
-            }
+    for y in 0..oy as usize {
+        let row = y * stride;
+        let s = row + (ox - 1) as usize * 4;
+        let p = [out[s], out[s + 1], out[s + 2], out[s + 3]];
+        for x in ox as usize..cw as usize {
+            let d = row + x * 4;
+            out[d..d + 4].copy_from_slice(&p);
         }
     }
-    Some((out, cw, ch))
+
+    // Row oy-1 is only complete once the right strip above has run.
+    let (filled, rest) = out.split_at_mut(oy as usize * stride);
+    let last_row = &filled[(oy - 1) as usize * stride..];
+    for row in rest.chunks_exact_mut(stride) {
+        row.copy_from_slice(last_row);
+    }
+
+    Some((cw, ch))
 }
 
 // Win11 rounded corners surface as transparent pixels in WGC near the crop edge, so square the window while capturing.
@@ -334,7 +336,7 @@ fn set_window_corners(top: HWND, square: bool) {
 }
 
 /// Warm WGC session bound to the top-level GPG window.
-/// FrameArrived caches the latest full top-level BGRA frame; cropping/resize happen lazily per request.
+/// Cropping and resize happen lazily per request, not per captured frame.
 pub struct WgcCapture {
     _device: ID3D11Device,
     _pool: Direct3D11CaptureFramePool,
@@ -342,7 +344,6 @@ pub struct WgcCapture {
     latest: FrameLatest,
     top: HWND,
     child: HWND,
-    /// Child client size at session creation.
     /// The frame pool is fixed to the window size, so a later resize (same hwnd) needs a rebind to match.
     bound_client: (i32, i32),
 }
@@ -367,7 +368,6 @@ impl WgcCapture {
                     let mut work = work.lock().unwrap();
                     let FrameWork { staging, scratch } = &mut *work;
                     if let Ok((w, h)) = process_frame(&device, &context, staging, scratch, &frame) {
-                        // Swap the filled buffer into `latest`, reclaim the old one to reuse.
                         let filled = std::mem::take(scratch);
                         let prev = latest.lock().unwrap().replace((filled, w, h, Instant::now()));
                         *scratch = prev.map(|(buf, ..)| buf).unwrap_or_default();
@@ -384,10 +384,9 @@ impl WgcCapture {
         let _ = session.SetIsBorderRequired(false);
         session.StartCapture()?;
 
-        // Square the window so the crop's bottom-right isn't eaten by the rounded-corner transparency.
         set_window_corners(top, true);
 
-        let bound_client = child_client_size(child);
+        let bound_client = GameWindow { hwnd: child }.get_client_size();
         Ok(Self { _device: device, _pool: pool, _session: session, latest, top, child, bound_client })
     }
 
@@ -399,39 +398,31 @@ impl WgcCapture {
         self.bound_client
     }
 
-    /// Age of the cached frame, None if nothing captured yet. Grows once WGC stops delivering (window hidden/gone).
+    /// Grows once WGC stops delivering, which is the daemon's liveness signal for the window.
     pub fn latest_frame_age(&self) -> Option<Duration> {
         self.latest.lock().unwrap().as_ref().map(|(_, _, _, captured_at)| captured_at.elapsed())
     }
 
-    /// Latest frame cropped to the CROSVM client area, resized to display, RGBA.
+    /// Returns the RGBA frame, its age, and the crop+resize cost.
     pub fn latest_display_rgba(&self) -> Option<(Vec<u8>, Duration, Duration)> {
         let t0 = Instant::now();
 
-        // Geometry needs no frame buffer — compute before locking.
         let (cx, cy, cw0, ch0) = crop_geometry(self.top, self.child)?;
 
-        // Hold the lock only to copy the crop region (not the whole frame).
-        let (cropped, cw, ch, captured_at) = {
-            let guard = self.latest.lock().unwrap();
-            let (bgra, fw, fh, captured_at) = guard.as_ref()?;
-            let (cropped, cw, ch) = crop_region(bgra, *fw, *fh, (cx, cy, cw0, ch0), EDGE_FILL)?;
-            (cropped, cw, ch, *captured_at)
-        };
+        CROP_BUF.with(|buf| {
+            let mut cropped = buf.borrow_mut();
 
-        let mut rgba = resize_to_display(cropped, cw, ch)?;
-        rgba.chunks_exact_mut(4).for_each(|c| c.swap(0, 2)); // BGRA -> RGBA
-        Some((rgba, captured_at.elapsed(), t0.elapsed()))
-    }
-}
+            let (cw, ch, captured_at) = {
+                let guard = self.latest.lock().unwrap();
+                let (bgra, fw, fh, captured_at) = guard.as_ref()?;
+                let (cw, ch) = crop_region(bgra, *fw, *fh, (cx, cy, cw0, ch0), &mut cropped)?;
+                (cw, ch, *captured_at)
+            };
 
-/// Physical client size of the CROSVM child.
-fn child_client_size(child: HWND) -> (i32, i32) {
-    let mut rect = RECT::default();
-    if unsafe { GetClientRect(child, &mut rect) }.is_ok() {
-        (rect.right - rect.left, rect.bottom - rect.top)
-    } else {
-        (0, 0)
+            let mut rgba = resize_to_display(&cropped, cw, ch)?;
+            rgba.chunks_exact_mut(4).for_each(|c| c.swap(0, 2)); // BGRA -> RGBA
+            Some((rgba, captured_at.elapsed(), t0.elapsed()))
+        })
     }
 }
 
@@ -474,7 +465,6 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     }
     let maa_port = u16::from_le_bytes(portbuf);
 
-    // Fetch the frame and start the timer once; both verbs reuse it.
     let t0 = Instant::now();
     let frame = cap.and_then(|c| c.latest_display_rgba()).filter(|(_, age, _)| *age < FRAME_STALE);
 
@@ -498,7 +488,7 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
                 );
             }
             None => {
-                write_extras_frame(&mut stream, &black_frame_rgba());
+                write_extras_frame(&mut stream, &black_frame_pixels());
                 debug_log(LogLevel::Warn, LogMode::Event, "WgcDaemon: extras no fresh frame, sent black frame");
             }
         }
@@ -523,7 +513,7 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
             1u8
         }
         None => {
-            transmit_pixels_nc(black_frame_rgba(), maa_port);
+            transmit_pixels_nc(black_frame_pixels(), maa_port);
             debug_log(LogLevel::Warn, LogMode::Event, "WgcDaemon: rawbync no fresh frame, sent black frame");
             1u8
         }
@@ -531,9 +521,9 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     let _ = stream.write_all(&[delivered]);
 }
 
-/// One maintenance tick: re-verify the window and kick off a rebind/relaunch as needed; returns true when it's gone (exit).
-/// The WgcCapture build runs on a worker (spawn_build); `building` guards against launching more than one at a time,
-/// and the old capture keeps serving until the new one lands.
+/// Returns true when the window is gone and the daemon should exit.
+/// `building` guards against launching more than one worker build, and the old capture keeps serving until
+/// the new one lands.
 fn maintain(
     cap: &mut Option<WgcCapture>,
     last_relaunch: &mut Option<Instant>,
@@ -555,7 +545,6 @@ fn maintain(
                 debug_log(LogLevel::Warn, LogMode::Event, "WgcDaemon: window gone, exiting");
                 return true;
             }
-            // No window yet: relaunch the game, throttled.
             // This runs only while the window is down, so the ~1s launch wait never lands inside a benchmark capture.
             if last_relaunch.is_none_or(|t| t.elapsed() >= RELAUNCH_COOLDOWN) {
                 *last_relaunch = Some(Instant::now());
@@ -564,10 +553,7 @@ fn maintain(
         }
         Some(w) => {
             w.restore();
-            let needs_rebind = cap
-                .as_ref()
-                .map(|c| w.hwnd != c.child() || child_client_size(w.hwnd) != c.bound_client())
-                .unwrap_or(true);
+            let needs_rebind = cap.as_ref().map(|c| w.hwnd != c.child() || w.get_client_size() != c.bound_client()).unwrap_or(true);
             if needs_rebind && !*building {
                 *building = true;
                 let top = unsafe { GetAncestor(w.hwnd, GA_ROOT) };
@@ -603,7 +589,6 @@ pub fn run_daemon() {
     let _ = set_registry(DAEMON_PORT_KEY, port as u32, REG_PATH_STATE);
     debug_log(LogLevel::Info, LogMode::End, &format!("WgcDaemon: started / awaiting handshake (127.0.0.1:{})", port));
 
-    // A WgcCapture build is the serve loop's only blocking step, so it runs on a worker and returns over this channel.
     let (build_tx, build_rx) = mpsc::channel::<AssertSend<Option<WgcCapture>>>();
     let mut cap: Option<WgcCapture> = None;
     let mut building = false;
@@ -660,7 +645,6 @@ pub fn run_daemon() {
         }
     }
 
-    // Restore the window's default corner rounding we squared off while capturing.
     if let Some(c) = cap.as_ref() {
         if unsafe { IsWindow(Some(c.top)).as_bool() } {
             set_window_corners(c.top, false);
@@ -672,7 +656,6 @@ pub fn run_daemon() {
     debug_log(LogLevel::Info, LogMode::End, "WgcDaemon: stopped");
 }
 
-/// Spawn the daemon detached if it is not already running.
 pub fn ensure_daemon() {
     const DETACHED_PROCESS: u32 = 0x0000_0008;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -683,7 +666,6 @@ pub fn ensure_daemon() {
 }
 
 /// Ask the daemon to deliver the latest frame to MAA's nc `port`.
-/// Returns true if the daemon confirmed delivery.
 pub fn deliver_via_daemon(maa_port: u16) -> bool {
     let dport = get_registry(DAEMON_PORT_KEY, 0u32, REG_PATH_STATE);
     if dport == 0 {
