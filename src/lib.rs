@@ -13,7 +13,8 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::os::windows::process::CommandExt;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use winreg::enums::HKEY_CURRENT_USER;
@@ -21,6 +22,13 @@ use winreg::RegKey;
 
 // Guards FreeLibrary from racing live captures.
 static INFLIGHT: AtomicI32 = AtomicI32::new(0);
+
+// Last daemon port that connected, so a capture doesn't reopen the registry every frame.
+// 0 means unknown; a failed connect clears it, so a restarted daemon on a new port is picked up.
+static CACHED_PORT: AtomicU32 = AtomicU32::new(0);
+
+// Frame staging buffer, reused so a capture doesn't allocate and zero ~3.7MB per call.
+static FRAME_BUF: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
 // Must match src/config.rs (REG_PATH_STATE) and src/wgc.rs (DAEMON_PORT_KEY)
 // and the EXE_PATH key written by src/main.rs.
@@ -53,11 +61,21 @@ fn reg_read_string(key: &str) -> Option<String> {
 
 /// Connect to the running WGC daemon, if any.
 fn connect_daemon() -> Option<TcpStream> {
+    let cached = CACHED_PORT.load(Ordering::Relaxed);
+    if cached != 0 {
+        if let Ok(stream) = TcpStream::connect(("127.0.0.1", cached as u16)) {
+            return Some(stream);
+        }
+        CACHED_PORT.store(0, Ordering::Relaxed);
+    }
+
     let port = reg_read_dword(KEY_DAEMON_PORT)?;
     if port == 0 {
         return None;
     }
-    TcpStream::connect(("127.0.0.1", port as u16)).ok()
+    let stream = TcpStream::connect(("127.0.0.1", port as u16)).ok()?;
+    CACHED_PORT.store(port, Ordering::Relaxed);
+    Some(stream)
 }
 
 /// Spawn `PlayBridgeADB.exe --wgc-daemon` detached.
@@ -80,41 +98,49 @@ fn ensure_daemon() {
     }
 }
 
-/// Ask the daemon for the latest frame as raw RGBA (1280x720, top-down).
-fn request_frame() -> Option<Vec<u8>> {
-    let mut stream = connect_daemon()?;
+/// Read the latest frame from the daemon into `buf` as raw RGBA (1280x720, top-down).
+/// `buf` is resized rather than reallocated, so a steady-state capture allocates nothing.
+fn request_frame(buf: &mut Vec<u8>) -> bool {
+    let Some(mut stream) = connect_daemon() else {
+        return false;
+    };
     let _ = stream.set_write_timeout(Some(Duration::from_millis(CONNECT_WRITE_TIMEOUT_MS)));
     let _ = stream.set_read_timeout(Some(Duration::from_millis(READ_TIMEOUT_MS)));
 
     // port == 0 selects the daemon's byte-return verb (see wgc.rs handle_client).
-    stream.write_all(&0u16.to_le_bytes()).ok()?;
-
-    let mut wh = [0u8; 8];
-    stream.read_exact(&mut wh).ok()?;
-    let w = u32::from_le_bytes(wh[0..4].try_into().ok()?);
-    let h = u32::from_le_bytes(wh[4..8].try_into().ok()?);
-    let len = (w as usize).checked_mul(h as usize)?.checked_mul(4)?;
-    if len == 0 || len > 64 * 1024 * 1024 {
-        return None;
+    if stream.write_all(&0u16.to_le_bytes()).is_err() {
+        return false;
     }
 
-    let mut buf = vec![0u8; len];
-    stream.read_exact(&mut buf).ok()?;
-    Some(buf)
+    let mut wh = [0u8; 8];
+    if stream.read_exact(&mut wh).is_err() {
+        return false;
+    }
+    let w = u32::from_le_bytes([wh[0], wh[1], wh[2], wh[3]]);
+    let h = u32::from_le_bytes([wh[4], wh[5], wh[6], wh[7]]);
+    let Some(len) = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(4)) else {
+        return false;
+    };
+    if len == 0 || len > 64 * 1024 * 1024 {
+        return false;
+    }
+
+    buf.resize(len, 0);
+    stream.read_exact(buf).is_ok()
 }
 
 /// Request a frame, ensuring the daemon exists and tolerating connection failure.
-fn request_frame_with_retry() -> Option<Vec<u8>> {
+fn request_frame_with_retry(buf: &mut Vec<u8>) -> bool {
     for attempt in 0..FRAME_RETRY_COUNT {
-        if let Some(frame) = request_frame() {
-            return Some(frame);
+        if request_frame(buf) {
+            return true;
         }
         if attempt == 0 {
             ensure_daemon();
         }
         std::thread::sleep(Duration::from_millis(FRAME_RETRY_DELAY_MS));
     }
-    None
+    false
 }
 
 // nemu ABI exports. Return convention: 0 = success, > 0 = failure.
@@ -162,7 +188,6 @@ pub unsafe extern "C" fn nemu_capture_display(
         *height = HEIGHT as i32;
     }
 
-    // Size query.
     if buffer_size == 0 {
         return 0;
     }
@@ -173,23 +198,40 @@ pub unsafe extern "C" fn nemu_capture_display(
     }
 
     INFLIGHT.fetch_add(1, Ordering::AcqRel);
-    let frame = request_frame_with_retry();
-    let frame = frame.as_deref();
-
-    let row = (WIDTH * 4) as usize;
-    let h = HEIGHT as usize;
-    for y in 0..h {
-        let src = (h - 1 - y) * row; // bottom-up
-        let dst = y * row;
-        if let Some(frame) = frame.filter(|f| f.len() >= needed) {
-            std::ptr::copy_nonoverlapping(frame.as_ptr().add(src), pixels.add(dst), row);
-        } else {
-            std::ptr::write_bytes(pixels.add(dst), 0, row);
+    // A poisoned lock must not panic here, so fall back to a one-off buffer instead of unwrapping.
+    match FRAME_BUF.lock() {
+        Ok(mut buf) => {
+            let ok = request_frame_with_retry(&mut buf);
+            write_frame_bottom_up(ok.then_some(buf.as_slice()), pixels);
+        }
+        Err(_) => {
+            let mut buf = Vec::new();
+            let ok = request_frame_with_retry(&mut buf);
+            write_frame_bottom_up(ok.then_some(buf.as_slice()), pixels);
         }
     }
     INFLIGHT.fetch_sub(1, Ordering::AcqRel);
     // Per-frame success is intentionally silent — the daemon logs the delivery.
     0
+}
+
+/// Copy `frame` into `pixels` bottom-up, zero-filling when there is no frame.
+///
+/// # Safety
+/// `pixels` must point to a buffer of at least `WIDTH * HEIGHT * 4` bytes.
+unsafe fn write_frame_bottom_up(frame: Option<&[u8]>, pixels: *mut u8) {
+    let row = (WIDTH * 4) as usize;
+    let h = HEIGHT as usize;
+    let frame = frame.filter(|f| f.len() >= row * h);
+
+    for y in 0..h {
+        let src = (h - 1 - y) * row;
+        let dst = y * row;
+        match frame {
+            Some(f) => std::ptr::copy_nonoverlapping(f.as_ptr().add(src), pixels.add(dst), row),
+            None => std::ptr::write_bytes(pixels.add(dst), 0, row),
+        }
+    }
 }
 
 // Input exports: required symbols for DLL load, but input goes through the minitouch/Win32 path.

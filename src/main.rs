@@ -120,8 +120,8 @@ fn parse_command(args: &[String]) -> Command {
         c if c.contains("input keyevent") => Command::KeyEvent { keycode: args[5].parse().unwrap_or(0) },
         c if c.contains("input text") => Command::Text { text: args[5..].join(" ") },
 
+        // `disconnect` never reaches here — the `connect` arm above matches it first and answers it.
         c if c.contains("cat /proc/net/arp")
-            || c.contains("disconnect")
             // Unsupported screencap modes (Encode -p, gzip): stay silent so MAA falls back instead of an "unknown command" toast.
             || c.contains("exec-out screencap -p")
             || c.contains("exec-out screencap | gzip -1")

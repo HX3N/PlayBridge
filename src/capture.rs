@@ -8,7 +8,10 @@ use std::{
 };
 
 use chrono::Local;
-use fast_image_resize::{images::Image, PixelType, ResizeAlg, ResizeOptions, Resizer};
+use fast_image_resize::{
+    images::{Image, ImageRef},
+    PixelType, ResizeAlg, ResizeOptions, Resizer,
+};
 use image::{codecs::png::PngEncoder, Rgba, RgbaImage};
 use win_screenshot::prelude::{capture_window_ex, Area, Using};
 
@@ -84,7 +87,7 @@ fn capture_resized_pixels(window: &GameWindow) -> Option<Vec<u8>> {
     // PrintWindow writes that edge as black in a full-size buffer, so the scale holds and only a thin black edge remains.
     let buf = capture_window_ex(hwnd.0 as isize, Using::PrintWindow, Area::ClientOnly, None, None).ok()?;
 
-    resize_to_display(buf.pixels, buf.width, buf.height)
+    resize_to_display(&buf.pixels, buf.width, buf.height)
 }
 
 // Reused so fast_image_resize keeps its scratch buffers instead of reallocating per resize.
@@ -94,8 +97,9 @@ thread_local! {
 }
 
 // Lanczos3 downscale to the MAA display size. Single source of truth for resize quality.
-pub fn resize_to_display(pixels: Vec<u8>, w: u32, h: u32) -> Option<Vec<u8>> {
-    let src_image = Image::from_vec_u8(w, h, pixels, PixelType::U8x4).ok()?;
+// Borrows the source so callers can hand over a buffer they reuse across frames.
+pub fn resize_to_display(pixels: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
+    let src_image = ImageRef::new(w, h, pixels, PixelType::U8x4).ok()?;
     let mut dst_image = Image::new(DISPLAY_WIDTH, DISPLAY_HEIGHT, PixelType::U8x4);
 
     let options = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(fast_image_resize::FilterType::Lanczos3));
@@ -104,11 +108,11 @@ pub fn resize_to_display(pixels: Vec<u8>, w: u32, h: u32) -> Option<Vec<u8>> {
     Some(dst_image.into_vec())
 }
 
-fn black_frame_pixels() -> Vec<u8> {
+pub fn black_frame_pixels() -> Vec<u8> {
     vec![0u8; (DISPLAY_WIDTH * DISPLAY_HEIGHT * 4) as usize]
 }
 
-pub fn transmit_pixels_nc(pixels: Vec<u8>, port: u16) {
+pub fn transmit_pixels_nc(mut pixels: Vec<u8>, port: u16) {
     let mut stream = match TcpStream::connect((LOOPBACK_IP, port)) {
         Ok(s) => s,
         Err(e) => {
@@ -117,19 +121,19 @@ pub fn transmit_pixels_nc(pixels: Vec<u8>, port: u16) {
         }
     };
 
-    // Protocol: [Width:4][Height:4][Format:4][RGBA Data] / Format=1 (RGBA_8888)
-    let mut buffer = Vec::with_capacity(12 + pixels.len());
-    buffer.extend_from_slice(&DISPLAY_WIDTH.to_le_bytes());
-    buffer.extend_from_slice(&DISPLAY_HEIGHT.to_le_bytes());
-    buffer.extend_from_slice(&1u32.to_le_bytes());
-    buffer.extend_from_slice(&pixels);
-
     // MAA's frame validation requires the last alpha byte to be 0xFF.
-    if let Some(last) = buffer.last_mut() {
+    if let Some(last) = pixels.last_mut() {
         *last = 0xFF;
     }
 
-    if let Err(e) = stream.write_all(&buffer) {
+    // Protocol: [Width:4][Height:4][Format:4][RGBA Data] / Format=1 (RGBA_8888)
+    // Split write — concatenating would copy the whole frame into a second buffer.
+    let mut header = [0u8; 12];
+    header[0..4].copy_from_slice(&DISPLAY_WIDTH.to_le_bytes());
+    header[4..8].copy_from_slice(&DISPLAY_HEIGHT.to_le_bytes());
+    header[8..12].copy_from_slice(&1u32.to_le_bytes());
+
+    if let Err(e) = stream.write_all(&header).and_then(|()| stream.write_all(&pixels)) {
         debug_log(LogLevel::Error, LogMode::Nested, &format!("Socket: send failed: {}", e));
         return;
     }

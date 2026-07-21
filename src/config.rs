@@ -1,5 +1,5 @@
 use chrono::Utc;
-use std::sync::{Arc, LazyLock, RwLock};
+use std::sync::{LazyLock, RwLock};
 use winreg::{
     enums::*,
     types::{FromRegValue, ToRegValue},
@@ -93,7 +93,7 @@ impl Config {
     }
 }
 
-pub static CONFIG: LazyLock<Arc<RwLock<Config>>> = LazyLock::new(|| Arc::new(RwLock::new(Config::default())));
+static CONFIG: LazyLock<RwLock<Config>> = LazyLock::new(|| RwLock::new(Config::default()));
 
 pub fn config() -> std::sync::RwLockReadGuard<'static, Config> {
     CONFIG.read().unwrap()
