@@ -48,9 +48,10 @@ const DAEMON_PORT_KEY: &str = "WGC_DAEMON_PORT";
 const DAEMON_IDLE_SECS: u64 = 120;
 // How often the daemon normalizes the GPG window (restore/resize/rebind), independent of request rate.
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(200);
-// A live GPG window composes continuously (Arknights always animates), so a frame older than this means capture froze:
-// the window was hidden/closed but its HWND lingers, so IsWindow/find can't see the loss. Serve black and re-verify.
+// Arknights animates continuously, so a frame older than this means the window stopped composing.
 const FRAME_STALE: Duration = Duration::from_secs(1);
+// Upper bound on reusing a stale frame, for when the window is gone but its HWND lingers past IsWindow.
+const FRAME_REUSE_LIMIT: Duration = Duration::from_secs(30);
 // While no window is bound, retry the relaunch no more often than this — start_game_if_needed blocks ~1s per attempt.
 const RELAUNCH_COOLDOWN: Duration = Duration::from_secs(10);
 const IPC_CONNECT_TIMEOUT_MS: u64 = 500;
@@ -465,8 +466,13 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     }
     let maa_port = u16::from_le_bytes(portbuf);
 
+    // Stale doesn't mean dead: a static overlay (the GPG user center webview AccountManager drives)
+    // stops composing too, so the last frame is still the current screen while the window lives.
     let t0 = Instant::now();
-    let frame = cap.and_then(|c| c.latest_display_rgba()).filter(|(_, age, _)| *age < FRAME_STALE);
+    let frame = cap.and_then(|c| c.latest_display_rgba()).filter(|(_, age, _)| {
+        *age < FRAME_STALE || (*age < FRAME_REUSE_LIMIT && cap.is_some_and(|c| unsafe { IsWindow(Some(c.child())).as_bool() }))
+    });
+    let reused = frame.as_ref().is_some_and(|(_, age, _)| *age >= FRAME_STALE);
 
     // port == 0 is the byte-return verb (fake nemu DLL): hand the RGBA frame to the caller instead of MAA's nc port.
     // Response: [w: u32 LE][h: u32 LE][rgba...]; no fresh frame degrades to a black frame in the same format.
@@ -476,10 +482,11 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
                 let t1 = Instant::now();
                 write_extras_frame(&mut stream, &rgba);
                 debug_log(
-                    LogLevel::Info,
+                    if reused { LogLevel::Warn } else { LogLevel::Info },
                     LogMode::Event,
                     &format!(
-                        "WgcDaemon: extras delivered in {} ms (age {} ms, crop+resize {} ms, ipc_write {} ms)",
+                        "WgcDaemon: extras {} in {} ms (age {} ms, crop+resize {} ms, ipc_write {} ms)",
+                        if reused { "stale frame reused" } else { "delivered" },
                         t0.elapsed().as_millis(),
                         frame_age.as_millis(),
                         crop_resize.as_millis(),
@@ -500,10 +507,11 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
             let t1 = Instant::now();
             transmit_pixels_nc(rgba, maa_port);
             debug_log(
-                LogLevel::Info,
+                if reused { LogLevel::Warn } else { LogLevel::Info },
                 LogMode::Nested,
                 &format!(
-                    "WgcDaemon: rawbync delivered in {} ms (age {} ms, crop+resize {} ms, transmit {} ms)",
+                    "WgcDaemon: rawbync {} in {} ms (age {} ms, crop+resize {} ms, transmit {} ms)",
+                    if reused { "stale frame reused" } else { "delivered" },
                     t0.elapsed().as_millis(),
                     frame_age.as_millis(),
                     crop_resize.as_millis(),
