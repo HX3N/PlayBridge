@@ -54,7 +54,6 @@ impl GameWindow {
         let target_hwnd = parent_or_self(self.hwnd);
 
         if unsafe { IsIconic(target_hwnd).as_bool() } {
-            display_notification(Notification::WindowMinimized);
             unsafe { _ = ShowWindow(target_hwnd, SW_RESTORE) };
             thread::sleep(Duration::from_millis(WINDOW_RESTORE_DELAY_MS));
         }

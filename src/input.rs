@@ -15,7 +15,6 @@ use crate::{
     capture::capture_touch_overlay,
     config::{DISPLAY_HEIGHT, DISPLAY_WIDTH},
     logging::{debug_log, LogLevel, LogMode},
-    notification::{display_notification, Notification},
     window::{describe_window, parent_or_self, GameWindow},
 };
 
@@ -210,6 +209,5 @@ pub fn run_minitouch_daemon() {
         }
     }
 
-    display_notification(Notification::MinitouchStopped);
     debug_log(LogLevel::Info, LogMode::End, "Minitouch: stopped");
 }

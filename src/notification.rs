@@ -17,7 +17,7 @@ pub enum Notification {
     Screenshot,
     ScreenshotFailed,
     GpgShutdown,
-    WindowMinimized,
+    WindowParked,
     WindowWrongRatio(f32),
     InternalResolution { w: u32, h: u32 },
     UnknownCommand(String),
@@ -26,20 +26,16 @@ pub enum Notification {
     UnsupportedClient(String),
     ClientMismatch(String, String),
     AdbInputUnsupported,
-    MinitouchStopped,
-    WgcDaemonStopped,
 }
 
 impl Notification {
     fn level(&self) -> LogLevel {
         match self {
-            Self::Screenshot | Self::GpgShutdown | Self::MinitouchStopped | Self::WgcDaemonStopped => LogLevel::Info,
+            Self::Screenshot | Self::GpgShutdown | Self::WindowParked => LogLevel::Info,
 
-            Self::WindowMinimized
-            | Self::InternalResolution { .. }
-            | Self::UnsupportedClient(..)
-            | Self::ClientMismatch(..)
-            | Self::AdbInputUnsupported => LogLevel::Warn,
+            Self::InternalResolution { .. } | Self::UnsupportedClient(..) | Self::ClientMismatch(..) | Self::AdbInputUnsupported => {
+                LogLevel::Warn
+            }
 
             // Wrong render aspect ratio distorts everything MAA reads, so it ranks with the hard failures, not warnings.
             Self::ScreenshotFailed | Self::WindowWrongRatio(..) | Self::UnknownCommand(..) | Self::Panic(..) => LogLevel::Error,
@@ -63,10 +59,9 @@ impl Notification {
                 "Google Play Games shut down".into(),
                 "Google Play Games 종료".into(),
             ),
-
-            Self::WindowMinimized => (
-                "Minimized windows are not supported".into(),
-                "최소화된 창은 지원하지 않아요".into(),
+            Self::WindowParked => (
+                "Moved the window off-screen instead of minimizing".into(),
+                "최소화하는 대신 창을 화면 밖으로 옮겼어요".into(),
             ),
             Self::WindowWrongRatio(r) => (
                 format!("The current aspect ratio is not supported\nCurrent 16:{:.2} / Recommended 16:9", r),
@@ -105,14 +100,6 @@ impl Notification {
                 "ADB Input is not supported\nPlease switch to Minitouch".into(),
                 "ADB Input은 지원하지 않아요\nMinitouch로 전환해주세요".into(),
             ),
-            Self::MinitouchStopped => (
-                "Minitouch daemon stopped".into(),
-                "Minitouch 데몬 종료".into(),
-            ),
-            Self::WgcDaemonStopped => (
-                "WGC capture daemon stopped".into(),
-                "WGC 캡처 데몬 종료".into(),
-            ),
         };
         if config().client == Client::KR {
             kr
@@ -124,7 +111,7 @@ impl Notification {
     fn cooldown(&self) -> Option<u64> {
         match self {
             Self::WindowWrongRatio(..) | Self::AdbInputUnsupported => Some(10),
-            Self::WindowMinimized => Some(2),
+            Self::WindowParked => Some(2),
             _ => None,
         }
     }
