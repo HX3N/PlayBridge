@@ -5,10 +5,17 @@ use std::{
 
 use crate::config::*;
 use crate::logging::{debug_log, LogLevel, LogMode};
-use winrt_toast::{content::text::TextPlacement, register, Scenario, Toast, ToastManager};
+use winrt_toast::{
+    content::action::{Action, ActivationType},
+    content::text::TextPlacement,
+    register, Scenario, Toast, ToastManager,
+};
 
 const AUM_ID: &str = "PlayBridge";
 const DISPLAY_NAME: &str = "PlayBridge";
+
+// config.rs holds the API endpoint, which a user cannot open in a browser.
+const RELEASES_URL: &str = "https://github.com/HX3N/PlayBridge/releases/latest";
 
 const ICON_DATA: &[u8] = include_bytes!("../assets/icon.png");
 
@@ -85,8 +92,8 @@ impl Notification {
             ),
 
             Self::UpdateAvailable(v) => (
-                format!("A new version is available ({})\nDownload it from GitHub Releases", v),
-                format!("신규 버전을 발견했어요 ({})\nGitHub Releases에서 다운로드해주세요", v),
+                format!("A new version is available ({})", v),
+                format!("신규 버전을 발견했어요 ({})", v),
             ),
             Self::UnsupportedClient(r) => (
                 format!("The requested client is not supported\nPlease check 'Client' in MAA 'Game Settings'\nRequested: {}", r),
@@ -112,6 +119,17 @@ impl Notification {
         match self {
             Self::WindowWrongRatio(..) | Self::AdbInputUnsupported => Some(10),
             Self::WindowParked => Some(2),
+            _ => None,
+        }
+    }
+
+    // Protocol activation keeps the button working after this short-lived process exits.
+    fn action(&self) -> Option<Action> {
+        match self {
+            Self::UpdateAvailable(..) => {
+                let label = if config().client == Client::KR { "다운로드 하러 가기" } else { "Download page" };
+                Some(Action::new(label, RELEASES_URL, "").with_activation_type(ActivationType::Protocol))
+            }
             _ => None,
         }
     }
@@ -160,6 +178,10 @@ pub fn display_notification(notification: Notification) {
         .text2(winrt_toast::content::text::Text::new(&body))
         .text3(winrt_toast::content::text::Text::new(format!("tag: {}", tag)).with_placement(TextPlacement::Attribution));
     toast.scenario(Scenario::Reminder);
+
+    if let Some(action) = notification.action() {
+        toast.action(action);
+    }
 
     let _ = manager.show(&toast);
 
