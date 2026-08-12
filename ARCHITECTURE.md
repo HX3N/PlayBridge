@@ -50,7 +50,10 @@ Both screencap paths converge on the **single** WGC daemon: PlayExtras gets the 
 socket (byte-return verb), RawByNc has the daemon connect out to MAA's `nc` port. Input never goes through the
 DLL — the nemu input exports are stubs; real input is Win32 `PostMessage` to the CROSVM child, from the bin or
 the minitouch daemon.
-The resident minitouch daemon posts a `MinitouchStopped` toast when its stdin closes.
+
+The daemon also owns the GPG window's state, not just its pixels: it normalizes the window every maintenance
+tick, relaunches the game when it is gone, and intercepts minimize so capture never stops (see _Window
+parking_).
 
 Beyond connect/screencap, the bin handles a few one-shot ADB commands (`execute_command`):
 
@@ -59,11 +62,19 @@ Beyond connect/screencap, the bin handles a few one-shot ADB commands (`execute_
   `UnsupportedClient` toast instead
 - `am force-stop` / `input keyevent HOME` → `WM_CLOSE` to the CROSVM child (`ForceStop`) + shutdown toast
 - `shell echo <text>` → echoes the text back (MAA's "Compatible Mode" connection preset)
+- `dumpsys SurfaceFlinger --latency` → prints `16666666`, the 60fps frame period in ns MAA's fps probe reads
 - `input tap` / `input swipe` → `AdbInputUnsupported` toast — raw ADB input is dropped, minitouch only
 - `input keyevent` (ESC) / `input text` → Win32 `PostMessage` to the CROSVM child
 - `--touch-overlay` → toggles touch-path overlay capture (`TOUCH_OVERLAY`, see _Shared state_)
-- no arguments → saves a desktop PNG screenshot (`capture::screenshot`, the one remaining PrintWindow path) and
-  runs the update check
+- no arguments → saves a desktop PNG screenshot (`capture::screenshot`) and runs the update check
+
+The two PNG-writing paths (`capture::screenshot` and `capture_touch_overlay`) are the only remaining users of
+the synchronous `PrintWindow` readback; every frame MAA actually consumes comes from WGC.
+
+The update check (`check_for_update`) compares the built-in version against the latest GitHub release and
+raises an `UpdateAvailable` toast when they differ. The toast carries a protocol-activated button to the
+releases page: Windows performs the activation, so the button still works after this short-lived process has
+exited.
 
 ## Connect handshake (PlayExtras + Minitouch)
 
@@ -104,9 +115,17 @@ ignored so MAA falls back instead of showing an "unknown command" toast.
 MAA applies `cvtColor(RGBA2BGR)` then `flip(.,0)` to PlayExtras frames, so the DLL writes the frame **bottom-up**
 to cancel that vertical flip (`nemu_capture_display`). RawByNc frames are sent top-down.
 
-With no fresh frame to serve (nothing captured yet, or the cached frame went stale), both verbs degrade to a
-black frame in the same format. If the daemon isn't running at all, `ScreencapNc` spawns it and answers that one
-request with a black frame itself; the next request hits the warm daemon.
+The DLL sits on MAA's hot path, so it avoids per-frame cost: the daemon port is cached in a static after the
+first successful connect (a failed connect clears it, so a daemon that restarted on a new port is picked up),
+and the ~3.7 MB frame arrives into one reused staging buffer instead of a fresh allocation per capture.
+
+Frame freshness is decided per request (`handle_client`). Arknights animates continuously, so a frame older
+than **1 s** (`FRAME_STALE`) means the window stopped composing — but stopped composing is not dead: a static
+overlay (the GPG user center webview) stalls WGC while the last frame is still the current screen. So a stale
+frame is **still served, up to 30 s** (`FRAME_REUSE_LIMIT`), as long as the bound child window is alive; the
+delivery is logged at `Warn` as a reuse. Past that bound, or with nothing captured at all, both verbs degrade
+to a black frame in the same format. If the daemon isn't running at all, `ScreencapNc` spawns it and answers
+that one request with a black frame itself; the next request hits the warm daemon.
 
 ## Benchmark one-shot
 
@@ -129,6 +148,8 @@ The bin and the DLL are separate processes; all persistent state lives under `HK
 | `…\state`            | `WGC_DAEMON_PORT`    | daemon (`run_daemon`)   | bin, DLL                 | daemon's TCP port, `0` while down                          |
 | `…\state`            | `EXE_PATH`           | `main()`                | DLL                      | lets the DLL spawn `--wgc-daemon` without knowing its path |
 | `…\state`            | `BENCHMARK`          | `wm size` handler       | `ScreencapNc` / `main()` | one-shot benchmark gate                                    |
+| `…\state`            | `WINDOW_HOME`        | daemon (`ParkState`)    | daemon                   | `x,y` the window belongs at, survives daemon restarts      |
+| `…\state`            | `PARK_HOME`          | daemon (`ParkState`)    | daemon                   | set only while parked; found at startup = died parked      |
 | `…\config`           | `CLIENT`, `VERSION`  | bin                     | bin                      | client (EN/KR/JP) + last-seen version                      |
 | `…\config`           | `TOUCH_OVERLAY`      | bin (`--touch-overlay`) | bin                      | touch-path overlay capture toggle                          |
 | `…\config`           | `LAST_UPDATE_CHECK`  | bin                     | bin                      | GitHub release check throttle (24 h)                       |
@@ -142,18 +163,56 @@ doesn't share the bin's modules) — **these must stay in sync with `config.rs` 
 - **Single instance**, guarded by a named mutex (`daemon_already_running`). Binds `127.0.0.1:0`, publishes the
   port, then serves frames from a warm `WgcCapture` session on the GPG top-level window.
 - A dedicated accept thread feeds a channel for zero accept latency; the main loop also runs a **maintenance
-  tick** every 200 ms (`maintain`) that restores/rebinds the window — fresh frames, not `IsWindow`, are the
-  liveness signal (a cached frame older than 1 s counts as stale and is served as black).
+  tick** every 50 ms (`maintain`) that unparks/rebinds the window. Fresh frames, not `IsWindow`, are the
+  liveness signal: while frames flow the bound child is reused, and once they stall past 1 s the window is
+  re-verified through `window.rs`'s title search.
 - **Rebinds build off the serve thread**: constructing a `WgcCapture` is the one slow step, so `spawn_build` runs
   it on a worker (`building` guards against duplicates) and the old capture keeps serving until the new one lands.
+  A rebind is triggered by a changed child HWND *or* a changed client size — the frame pool is fixed to the
+  window size, so a resize needs a new session even on the same HWND.
 - While no window is bound (startup, or waiting out a game restart), the daemon **relaunches the game itself**
   via `ensure_game_ready`, throttled to one attempt per 10 s.
 - On every (re)bind, `check_render_resolution` reads the per-package render resolution GPG keeps in `store.db`
   (`src/store.rs`): a non-16:9 value raises a `WindowWrongRatio` toast, a 16:9 value other than 1280x720 raises
   `InternalResolution` — once per value.
-- **Self-exits** on idle timeout (120 s) or when the window is truly gone, so a fresh daemon rebinds after the
-  game relaunches. On exit it restores the window's default rounded corners, clears the port, and posts a
-  `WgcDaemonStopped` toast.
+- **Self-exits** on idle timeout (45 s) or when the window is truly gone, so a fresh daemon rebinds after the
+  game relaunches. On exit it restores the window's default rounded corners, un-parks the window if it is
+  parked, and clears the published port.
 
 See `src/wgc.rs` for the capture/crop/resize details (notably `crop_region`, which pads the right/bottom edge
 DWM leaves transparent).
+
+## Window parking (minimize mimicry)
+
+WGC stops delivering frames the moment a window is genuinely minimized, which would stall MAA for as long as
+the user keeps GPG out of the way. Instead of rejecting the minimize, the daemon **fakes** it: the window stays
+restored and composing, but is moved just below the virtual desktop (`park_y()` = bottom + 32 px). Only Y
+moves, so the taskbar button stays on its own monitor and the window still looks minimized.
+
+Two `SetWinEventHook` callbacks on a dedicated message-pump thread (`spawn_minimize_watcher`) plus the
+maintenance-tick poll (`ParkState::update`) split the work:
+
+| Trigger                    | Handler                                | Effect                                                              |
+| -------------------------- | -------------------------------------- | ------------------------------------------------------------------- |
+| `EVENT_SYSTEM_MINIMIZESTART` | `on_minimize_start`                  | moves the window off-screen **before** the minimize lands, so the move sticks and becomes the restore rect |
+| `EVENT_SYSTEM_FOREGROUND`  | `on_foreground`                        | re-applies the stored return point when the user brings GPG back      |
+| maintenance tick           | `ParkState::update` → `park`/`unpark`  | owns the state machine: parks on `IsIconic`, unparks when GPG is foreground |
+
+Ordering is what makes it work. Once a window is iconic, `SetWindowPos` is silently ignored, so the hook has to
+act during `MINIMIZESTART` while the window is still restored; the poll then finishes the job by
+un-minimizing (`SW_SHOWNOACTIVATE`) at the already off-screen position. `SetWindowPlacement` is never used to
+park, because it drags an off-screen `rcNormalPosition` back onto the primary monitor.
+
+The window's real origin ("home") is learned from `GetWindowRect` while it is on a monitor and cached in
+`WINDOW_HOME`. A minimized window reports a bogus origin, so if the daemon meets an already-minimized window
+with no cached home it surfaces it for one pass (`pending_park`) to read a real one. An origin that is off all
+monitors is never stored as home — that is a parked position, and storing it would strand the window there.
+
+Crash recovery hangs off `PARK_HOME`, which exists only while parked: a fresh daemon that finds it
+(`adopt_stale_park`) knows the previous daemon died with the window off-screen and moves it back. A clean exit
+does the same through `restore_on_exit`, which disarms both hooks first (otherwise its own re-minimize
+re-parks the window it is restoring) and re-minimizes at the right spot via `place_minimized_at` — minimize
+first, fix `rcNormalPosition` by delta after, so the animation never plays at the parked coordinates.
+
+Parking raises a `WindowParked` toast once per park (2 s cooldown), replacing the older "minimized windows are
+not supported" message.
