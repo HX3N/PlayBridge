@@ -4,6 +4,9 @@
 pub const REG_PATH_STATE: &str = r"Software\PlayBridge\state";
 pub const KEY_DAEMON_PORT: &str = "WGC_DAEMON_PORT";
 pub const KEY_EXE_PATH: &str = "EXE_PATH";
+/// The MAA that ran `devices`. The daemon has no other way to tell that MAA is gone.
+#[allow(dead_code)]
+pub const KEY_MAA_PID: &str = "MAA_PID";
 
 /// The daemon resizes to this, and MAA's reported `wm size` matches it so click coordinates line up.
 pub const DISPLAY_WIDTH: u32 = 1280;

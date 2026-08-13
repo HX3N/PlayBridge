@@ -6,7 +6,7 @@ use winreg::{
     RegKey,
 };
 
-use crate::logging::{debug_log, LogLevel, LogMode};
+use crate::logging::{debug_log, reply, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification};
 
 pub use crate::shared::{DISPLAY_HEIGHT, DISPLAY_WIDTH, REG_PATH_STATE};
@@ -37,6 +37,17 @@ impl Client {
             "YoStarJP" => Client::JP,
             "YoStarEN" => Client::EN,
             _ => Client::Empty,
+        }
+    }
+
+    /// MAA names its clients differently from the registry form above.
+    /// Official, Bilibili and Txwy have no Google Play Games package, so they resolve to None.
+    pub fn from_maa_client_type(s: &str) -> Option<Self> {
+        match s {
+            "KR" => Some(Client::KR),
+            "JP" => Some(Client::JP),
+            "EN" => Some(Client::EN),
+            _ => None,
         }
     }
 
@@ -115,26 +126,6 @@ pub fn set_client(client: Client) {
     Config::reload();
 }
 
-pub fn set_benchmark_mode() {
-    let _ = set_registry("BENCHMARK", 1u32, REG_PATH_STATE);
-    debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: armed");
-}
-
-// One-shot flag: MAA arms benchmark with `wm size`, then fires a single screencap to measure throughput.
-// Consume it so only that one capture is silenced and normal capture resumes on the next request.
-pub fn check_benchmark_mode() -> bool {
-    if get_registry("BENCHMARK", 0u32, REG_PATH_STATE) != 0 {
-        let _ = set_registry("BENCHMARK", 0u32, REG_PATH_STATE);
-        debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: consumed");
-        return true;
-    }
-    false
-}
-
-pub fn peek_benchmark_mode() -> bool {
-    get_registry("BENCHMARK", 0u32, REG_PATH_STATE) != 0
-}
-
 pub fn version() -> &'static str {
     option_env!("PLAYBRIDGE_VERSION").unwrap_or(DEVELOPMENT_VERSION)
 }
@@ -143,14 +134,15 @@ pub fn check_version() {
     let current_version = version();
     let stored_version: String = get_registry("VERSION", String::new(), REG_PATH_CONFIG);
 
-    println!("PlayBridge {}", current_version);
+    reply(&format!("PlayBridge {}", current_version));
 
     if stored_version == current_version {
         debug_log(LogLevel::Info, LogMode::Nested, &format!("Version: {}", current_version));
         return;
     }
 
-    debug_log(LogLevel::Info, LogMode::Nested, &format!("Version: updated {} -> {}", stored_version, current_version));
+    let previous = if stored_version.is_empty() { "(none)" } else { stored_version.as_str() };
+    debug_log(LogLevel::Info, LogMode::Nested, &format!("Version: updated {} -> {}", previous, current_version));
     set_registry("VERSION", current_version, REG_PATH_CONFIG).unwrap();
     Config::reload();
 }
@@ -216,7 +208,5 @@ fn toggle_config(key_name: &str) {
     key.set_value(key_name, &new_val).unwrap();
 
     let status = if new_val == 1 { "ON" } else { "OFF" };
-    let msg = format!("{}: {}", key_name, status);
-    println!("{}", msg);
-    debug_log(LogLevel::Info, LogMode::Nested, &msg);
+    reply(&format!("{}: {}", key_name, status));
 }

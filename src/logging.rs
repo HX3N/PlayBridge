@@ -4,6 +4,7 @@ use std::{
     io::Write,
     panic,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
     sync::OnceLock,
 };
 
@@ -25,10 +26,10 @@ pub enum LogMode {
     Nested,
     Event,
     End,
+    Plain,
 }
 
-// Resolved once per process, so a per-line exe lookup and directory create are not paid on every log.
-// Trade-off: a folder deleted mid-run is not recreated, and logging goes quiet until restart.
+// A folder deleted mid-run is not recreated, and logging goes quiet until restart.
 static DEBUG_FOLDER: OnceLock<PathBuf> = OnceLock::new();
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -57,16 +58,30 @@ pub fn debug_log(level: LogLevel, mode: LogMode, message: &str) {
         LogLevel::Error => "ERR",
     };
 
-    let flat_message = message.replace('\n', " ");
+    let flat_message = message.replace(['\n', '\t'], " ");
 
     let log = match mode {
-        LogMode::Start => format!("[{}][{}] {}", now, level_tag, flat_message),
+        LogMode::Start | LogMode::Plain => format!("[{}][{}] {}", now, level_tag, flat_message),
         LogMode::Nested => format!("[{}][{}] │ {}", now, level_tag, flat_message),
         LogMode::Event => format!("[{}][{}] X {}", now, level_tag, flat_message),
         LogMode::End => format!("[{}][{}] └ {}", now, level_tag, flat_message),
     };
 
     let _ = writeln!(file, "{}", log);
+}
+
+static REPLIED: AtomicBool = AtomicBool::new(false);
+
+pub fn reply(text: &str) {
+    println!("{}", text);
+    REPLIED.store(true, Ordering::Relaxed);
+    debug_log(LogLevel::Info, LogMode::Nested, &format!("→ {}", text));
+}
+
+pub fn log_silent_reply() {
+    if !REPLIED.load(Ordering::Relaxed) {
+        debug_log(LogLevel::Info, LogMode::Nested, "→");
+    }
 }
 
 pub fn register_panic_hook() {

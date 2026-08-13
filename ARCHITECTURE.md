@@ -26,9 +26,11 @@ MAA (MaaAssistantArknights)
    │
    ├─ control / input ───────────►  PlayBridgeADB.exe        (bin = fake adb, src/main.rs)
    │    adb shell ...                  │  parse_command → execute_command
-   │                                   ├─ "--wgc-daemon" → wgc::run_daemon()      (spawns the daemon below)
-   │                                   ├─ "-i"           → input::run_minitouch_daemon()  (resident, src/input.rs)
-   │                                   └─ keyevent/text  → Win32 PostMessage ───────────────┐
+   │                                   ├─ "--wgc-daemon"      → wgc::run_daemon()   (spawns the daemon below)
+   │                                   ├─ "--launcher-daemon" → window::run_launcher_daemon()
+   │                                   │                        (short-lived, starts GPG then exits)
+   │                                   ├─ "-i"                → input::run_minitouch_daemon()  (resident, src/input.rs)
+   │                                   └─ keyevent/text       → Win32 PostMessage ────────────┐
    │                                                                                        │
    ├─ RawByNc screencap ─────────►  PlayBridgeADB.exe (Command::ScreencapNc)                │
    │    exec-out screencap |           │  deliver_via_daemon(maa_port)                      │
@@ -52,15 +54,16 @@ DLL — the nemu input exports are stubs; real input is Win32 `PostMessage` to t
 the minitouch daemon.
 
 The daemon also owns the GPG window's state, not just its pixels: it normalizes the window every maintenance
-tick, relaunches the game when it is gone, intercepts minimize so capture never stops (see _Window parking_),
-and clears an activation the window failed to release (see _Stale activation_). Both live in
-`src/window_state.rs`; `src/wgc.rs` keeps the capture pipeline.
+tick, intercepts minimize so capture never stops (see _Window parking_), and clears an activation the window
+failed to release (see _Stale activation_). Both live in `src/window_state.rs`; `src/wgc.rs` keeps the capture
+pipeline. Starting the game is not its job — that belongs to the launcher daemon (see _Client selection and
+launch_).
 
 Beyond connect/screencap, the bin handles a few one-shot ADB commands (`execute_command`):
 
-- `am start -n <intent>` → resolves the client from the intent package (`apply_intent_package`) and launches the
-  game if needed; a package that contradicts the configured client raises a `ClientMismatch` /
-  `UnsupportedClient` toast instead
+- `am start -n <intent>` → checks the intent package against the client MAA already chose
+  (`apply_intent_package`) and spawns the launcher daemon; a package that contradicts it raises a
+  `ClientMismatch` / `UnsupportedClient` toast instead
 - `am force-stop` / `input keyevent HOME` → `WM_CLOSE` to the CROSVM child (`ForceStop`) + shutdown toast
 - `shell echo <text>` → echoes the text back (MAA's "Compatible Mode" connection preset)
 - `dumpsys SurfaceFlinger --latency` → prints `16666666`, the 60fps frame period in ns MAA's fps probe reads
@@ -85,11 +88,11 @@ with whatever keeps MAA moving forward. Call stack on MAA's side:
 
 | #   | MAA ADB command                                                                | `main.rs` `Command`       | PlayBridge response / effect                                                  |
 | --- | ------------------------------------------------------------------------------ | ------------------------- | ----------------------------------------------------------------------------- |
-| 1   | `adb devices`                                                                  | `Devices`                 | prints `127.0.0.1:6000\tdevice` and a `PlayBridge <version>` line; runs update check                 |
+| 1   | `adb devices`                                                                  | `Devices`                 | prints `127.0.0.1:6000\tdevice` and a `PlayBridge <version>` line; **resolves the client from MAA's own config and preloads the launcher** |
 | 2   | `adb connect <addr>`                                                           | `Connect`                 | `connected to Google Play Games`                                              |
 | 3   | `settings get secure android_id`                                               | `GetUuid`                 | `0000000000000000`                                                            |
 | 4   | `getprop ro.build.version.release`                                             | `GetPropRelease`          | `14` (faked Android version)                                                  |
-| 5   | `wm size`                                                                      | `WindowDisplays`          | `1280 720`; **arms the one-shot benchmark flag**                              |
+| 5   | `wm size`                                                                      | `WindowDisplays`          | `1280 720`                                                                    |
 | 6   | `cat /proc/net/arp \| grep :`                                                  | `Ignore`                  | silent (no arp table to fake)                                                 |
 | —   | _(socket server init, nemu DLL `nemu_connect` + first `nemu_capture_display`)_ | —                         | DLL spawns/warms the WGC daemon; not an ADB call                              |
 | 7   | `getprop ro.product.cpu.abilist`                                               | `GetPropAbilist`          | abilist string (selects the minitouch binary)                                 |
@@ -103,7 +106,7 @@ handshake has already told MAA the daemon is up by then, so it never exits on a 
 the first commit that finds one and skips commits until then.
 
 After connect returns, MAA benchmarks its screencap modes (RawByNc, RawWithGzip, Encode, PlayExtras DLL) and
-locks onto the fastest. See _Benchmark one-shot_ for how PlayBridge keeps that measurement fair.
+locks onto the fastest.
 
 ## Supported screencap modes
 
@@ -132,16 +135,60 @@ delivery is logged at `Warn` as a reuse. Past that bound, or with nothing captur
 to a black frame in the same format. If the daemon isn't running at all, `ScreencapNc` spawns it and answers
 that one request with a black frame itself; the next request hits the warm daemon.
 
-## Benchmark one-shot
+## Client selection and launch
 
-`wm size` (#5; `dumpsys window displays` maps to the same handler) sets a one-shot `BENCHMARK` flag in the
-registry. While it is armed:
+`adb devices` is where the client (EN/KR/JP) is first **proposed**, not where it is settled. Only that process
+has MAA as its parent, so `src/maa.rs` walks up to it (`CreateToolhelp32Snapshot` → `th32ParentProcessID`),
+reads `<MAA>/config/gui.new.json` and takes `Configurations[<Current>].Gui.RuntimeSettings.ClientType`. MAA's
+`Official`, `Bilibili` and `Txwy` have no Google Play Games package, so they raise an `UnsupportedClient` toast
+and nothing is launched — and nothing is stored either, so `CLIENT` keeps whatever it already held. An
+unreadable config falls back to the window-title scan in `GameWindow::find()`.
 
-- `main()` skips `ensure_game_ready()` (`peek_benchmark_mode`), so a ~1s game launch can't skew the timing.
-- the next RawByNc request returns a **black frame** immediately (`check_benchmark_mode` consumes the flag),
-  so a cold daemon spawn doesn't penalize RawByNc's measured throughput.
+The same handler stores the resolved client in `CLIENT` and MAA's PID in `MAA_PID`. That is how the daemons
+learn both — they are spawned `DETACHED_PROCESS`, so they cannot walk up to MAA themselves.
 
-The flag is consumed on that single capture; normal capture resumes on the next request.
+`devices` arrives once per MAA process, so a user whose MAA points at the wrong client would otherwise be stuck
+with it for the whole session. Two later points correct `CLIENT` against what is actually on the machine. Their
+preconditions are exclusive: a running window rules the store lookup out, because the launcher exits at
+"game already up" before reaching it.
+
+| Evidence                          | Where                                                        | Precondition |
+| --------------------------------- | ------------------------------------------------------------ | ------------ |
+| the window that is really up      | `GameWindow::find()` fallback → `adopt_running_client`        | GPG running  |
+| GPG's own install record          | `run_launcher_daemon` → `adopt_installed_client`              | GPG closed   |
+
+`GameWindow::find()` matches titles by prefix, so `명일방주` and `명일방주.*` are the same client and never reach
+the fallback. Reaching it means no window carries the configured client's title at all, and a hit there is a
+different client — the running game wins. The launcher's lookup instead asks `store::app_record` for each of the
+other two clients and claims one only when exactly one answers; two installed side by side is assumed not to
+happen and is not guessed at. Both write `CLIENT` before raising their `ClientMismatch` toast, because
+`notification.rs` picks the toast's language from that same value.
+
+A corrected `CLIENT` is also what makes `apply_intent_package` speak up: MAA keeps sending the intent for the
+client it still believes in, which now contradicts the stored one and raises `ClientMismatch` on its own.
+
+Launching is a **short-lived process of its own** (`--launcher-daemon`, `window.rs`), spawned from `devices` as
+a preload because GPG takes seconds to come up. Its lifetime *is* the "game is starting" signal, so nothing
+else tracks launch state — capture and input simply find no window until it exits.
+
+- Single instance (`Local\PlayBridgeLauncher`). `ensure_launcher` tests the mutex with `OpenMutexW` instead of
+  creating it: creating it would make the caller the owner, and every later launcher would see a daemon that
+  never started.
+- Exits at once if the game window is already up.
+- Exits too when no client has been set, since `CLIENT` is what names the package to launch.
+- Checks GPG's `store.db` for the package first (`store::app_record`). Without a record the launch URI only
+  raises GPG's own window, which reads as a loading screen forever, so a miss falls through to
+  `adopt_installed_client` and only raises a `GameNotInstalled` toast when that finds nothing to switch to.
+  A hit is logged with the app version and both resolutions GPG keeps for it.
+- Stops as soon as MAA does: every poll checks `maa::is_alive()` before anything else, so no URI fires once MAA
+  is gone. It is spawned `DETACHED_PROCESS`, so nothing else would end it.
+- Otherwise fires `googleplaygames://launch/?id=<package>&pid=1`, retrying every 10 s until the window appears
+  and giving up after 180 s. A loading screen that vanishes without the game means the launch died partway, so
+  the cooldown is cleared and the URI fires again.
+
+The WGC daemon also calls `ensure_launcher` when MAA asks for a screen and there is none — that request is the
+one moment worth starting the game. Nothing else launches it, which is why closing GPG after MAA has finished
+no longer brings it back.
 
 ## Shared state (registry)
 
@@ -152,7 +199,7 @@ The bin and the DLL are separate processes; all persistent state lives under `HK
 | -------------------- | -------------------- | ----------------------- | ------------------------ | ---------------------------------------------------------- |
 | `…\state`            | `WGC_DAEMON_PORT`    | daemon (`run_daemon`)   | bin, DLL                 | daemon's TCP port, `0` while down                          |
 | `…\state`            | `EXE_PATH`           | `main()`                | DLL                      | lets the DLL spawn `--wgc-daemon` without knowing its path |
-| `…\state`            | `BENCHMARK`          | `wm size` handler       | `ScreencapNc` / `main()` | one-shot benchmark gate                                    |
+| `…\state`            | `MAA_PID`            | `devices` handler       | WGC daemon               | the MAA that spawned the daemons; its exit ends them       |
 | `…\state`            | `WINDOW_HOME`        | daemon (`ParkState`)    | daemon                   | `x,y` the window belongs at, survives daemon restarts      |
 | `…\state`            | `PARK_HOME`          | daemon (`ParkState`)    | daemon                   | set only while parked; found at startup = died parked      |
 | `…\config`           | `CLIENT`, `VERSION`  | bin                     | bin                      | client (EN/KR/JP) + last-seen version                      |
@@ -167,7 +214,7 @@ silent mismatch.
 
 ## WGC daemon lifecycle
 
-- **Single instance**, guarded by a named mutex (`daemon_already_running`). Binds `127.0.0.1:0`, publishes the
+- **Single instance**, guarded by a named mutex (`already_running`). Binds `127.0.0.1:0`, publishes the
   port, then serves frames from a warm `WgcCapture` session on the GPG top-level window.
 - A dedicated accept thread feeds a channel for zero accept latency; the main loop also runs a **maintenance
   tick** every 50 ms (`maintain`) that unparks/rebinds the window. Fresh frames, not `IsWindow`, are the
@@ -177,14 +224,17 @@ silent mismatch.
   it on a worker (`building` guards against duplicates) and the old capture keeps serving until the new one lands.
   A rebind is triggered by a changed child HWND *or* a changed client size — the frame pool is fixed to the
   window size, so a resize needs a new session even on the same HWND.
-- While no window is bound (startup, or waiting out a game restart), the daemon **relaunches the game itself**
-  via `ensure_game_ready`, throttled to one attempt per 10 s.
+- While no window is bound (startup, or waiting out a game restart), the daemon **waits** — it does not launch
+  anything. A capture request that finds no frame calls `ensure_launcher` on its way to returning black.
 - On every (re)bind, `check_render_resolution` reads the per-package render resolution GPG keeps in `store.db`
   (`src/store.rs`): a non-16:9 value raises a `WindowWrongRatio` toast, a 16:9 value other than 1280x720 raises
   `InternalResolution` — once per value.
-- **Self-exits** on idle timeout (45 s) or when the window is truly gone, so a fresh daemon rebinds after the
-  game relaunches. On exit it restores the window's default rounded corners, un-parks the window if it is
-  parked, and clears the published port.
+- **Lives exactly as long as MAA.** It polls `MAA_PID` once a second and exits within ~1 s of MAA going away,
+  the same rule the launcher polls for and the minitouch daemon gets for free from its stdin pipe. Idling does
+  not end it: after 15 s with no request (`LOW_POWER_AFTER`) it drops to **low power**, discarding arriving
+  frames instead of paying the GPU→CPU copy for nobody, and the next request restores full rate. On exit it
+  restores the window's default rounded corners, un-parks the window if it is parked, and clears the published
+  port.
 
 See `src/wgc.rs` for the capture/crop/resize details (notably `crop_region`, which pads the right/bottom edge
 DWM leaves transparent).

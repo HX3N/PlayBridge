@@ -1,9 +1,10 @@
-use std::{env, time::Instant};
+use std::{env, path::Path, time::Instant};
 
 mod capture;
 mod config;
 mod input;
 mod logging;
+mod maa;
 mod notification;
 mod shared;
 mod store;
@@ -13,11 +14,10 @@ mod window_state;
 
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 
-use crate::config::{check_benchmark_mode, check_for_update, check_version, toggle_touch_overlay, DISPLAY_HEIGHT, DISPLAY_WIDTH};
-use crate::config::{peek_benchmark_mode, set_benchmark_mode};
-use crate::logging::{debug_log, LogLevel, LogMode};
+use crate::config::{check_for_update, check_version, set_client, toggle_touch_overlay, Client, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use crate::logging::{debug_log, reply, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification};
-use crate::window::{apply_intent_package, ensure_game_ready, start_game_if_needed, GameWindow};
+use crate::window::{apply_intent_package, ensure_launcher, GameWindow};
 
 fn main() {
     unsafe { _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
@@ -27,7 +27,14 @@ fn main() {
     logging::register_panic_hook();
     logging::rotate_log();
 
-    let raw_args: Vec<String> = env::args().collect();
+    // We spawn our own daemons by full path while MAA calls us by name, so argv[0] alone would
+    // make the same process read two different ways in the log.
+    let mut raw_args: Vec<String> = env::args().collect();
+    if let Some(exe) = raw_args.first_mut() {
+        if let Some(name) = Path::new(exe.as_str()).file_name() {
+            *exe = name.to_string_lossy().into_owned();
+        }
+    }
     let full_joined = raw_args.join(" ");
     let args: Vec<String> = raw_args[1..].iter().flat_map(|s| s.split_whitespace()).map(String::from).collect();
 
@@ -43,18 +50,24 @@ fn main() {
         return;
     }
 
+    if args.iter().any(|a| a == window::LAUNCHER_ARG) {
+        window::run_launcher_daemon();
+        return;
+    }
+
     // shell /data/local/tmp/<uuid> -i
     if args.iter().any(|a| a == "-i") {
         input::run_minitouch_daemon();
         return;
     }
 
-    if !peek_benchmark_mode() {
-        ensure_game_ready();
-    }
-
     let command = parse_command(&args);
+    // Its frame goes out over a socket, so an empty stdout here is not silence.
+    let answers_off_stdout = matches!(command, Command::ScreencapNc { .. });
     execute_command(command);
+    if !answers_off_stdout {
+        logging::log_silent_reply();
+    }
 
     debug_log(LogLevel::Info, LogMode::End, &format!("{} ms", start.elapsed().as_millis()));
 }
@@ -138,6 +151,29 @@ fn parse_command(args: &[String]) -> Command {
     }
 }
 
+/// Only this process has MAA as its parent, so nowhere else can read the config it selected.
+/// False means MAA is set to a client with no Google Play Games package, so nothing should be launched.
+fn apply_maa_client() -> bool {
+    if let Some(pid) = maa::parent_pid() {
+        let _ = config::set_registry(shared::KEY_MAA_PID, pid, config::REG_PATH_STATE);
+    }
+
+    let Some(client_type) = maa::client_type() else {
+        debug_log(LogLevel::Warn, LogMode::Nested, "Client: MAA config unreadable, falling back to window title");
+        return true;
+    };
+
+    let Some(client) = Client::from_maa_client_type(&client_type) else {
+        display_notification(Notification::UnsupportedClient(client_type));
+        return false;
+    };
+
+    // set_client is silent when nothing changes, which would leave no trace that MAA was read at all.
+    debug_log(LogLevel::Info, LogMode::Nested, &format!("Client: {} from MAA config", client.as_str()));
+    set_client(client);
+    true
+}
+
 fn execute_command(command: Command) {
     let window = GameWindow::find();
 
@@ -151,17 +187,18 @@ fn execute_command(command: Command) {
             check_for_update();
         }
         Command::Connect => {
-            println!("connected to Google Play Games");
+            reply("connected to Google Play Games");
         }
         Command::StartActivity { intent } => {
-            apply_intent_package(&intent);
-            start_game_if_needed();
+            if apply_intent_package(&intent) {
+                ensure_launcher();
+            }
 
-            println!("Starting: Intent {{ cmp={} }}", intent);
-            println!("Warning: Activity not started, intent has been delivered to currently running top-most instance.");
+            reply(&format!("Starting: Intent {{ cmp={} }}", intent));
+            reply("Warning: Activity not started, intent has been delivered to currently running top-most instance.");
         }
         Command::Echo { text } => {
-            println!("{}", text);
+            reply(&text);
         }
         Command::ForceStop => {
             if let Some(w) = window {
@@ -176,33 +213,34 @@ fn execute_command(command: Command) {
         }
 
         Command::WindowDisplays => {
-            println!("{} {}", DISPLAY_WIDTH, DISPLAY_HEIGHT);
-            set_benchmark_mode();
+            reply(&format!("{} {}", DISPLAY_WIDTH, DISPLAY_HEIGHT));
         }
         Command::Devices => {
             // Must be host:port with a port get_mumu_index() accepts (7555, >=16384, or >=5555), or MAA skips MumuExtras.
-            println!("List of devices attached");
-            println!("127.0.0.1:6000\tdevice");
+            reply("List of devices attached");
+            reply("127.0.0.1:6000\tdevice");
 
             check_version();
             check_for_update();
+
+            // Preload: GPG takes a while to come up, so the launcher starts before MAA asks for a screen.
+            if apply_maa_client() {
+                ensure_launcher();
+            }
         }
         Command::GetPropRelease => {
-            println!("14");
+            reply("14");
         }
         Command::GetUuid => {
-            println!("0000000000000000");
+            reply("0000000000000000");
         }
         Command::Fps => {
             // 60fps frame period in ns, the value MAA's fps probe reads as the first SurfaceFlinger --latency line.
-            println!("16666666");
+            reply("16666666");
         }
 
         Command::ScreencapNc { port } => {
-            if check_benchmark_mode() {
-                debug_log(LogLevel::Info, LogMode::Nested, "Benchmark: sent black frame (RawByNc)");
-                capture::send_black_frame_nc(port);
-            } else if wgc::deliver_via_daemon(port) {
+            if wgc::deliver_via_daemon(port) {
                 debug_log(LogLevel::Info, LogMode::Nested, "RawByNc: delivered via WGC daemon");
             } else {
                 // Daemon not warm yet: spawn it and send a black frame this once; the next request hits the warm daemon.
@@ -213,10 +251,10 @@ fn execute_command(command: Command) {
         }
 
         Command::GetPropAbilist => {
-            println!("x86_64,x86,arm64-v8a,armeabi-v7a,armeabi");
+            reply("x86_64,x86,arm64-v8a,armeabi-v7a,armeabi");
         }
         Command::DumpsysInputOrientation => {
-            println!("0");
+            reply("0");
         }
         Command::KeyEvent { keycode } => {
             if let Some(w) = window {

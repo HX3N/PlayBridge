@@ -187,7 +187,7 @@ pub fn run_minitouch_daemon() {
             }
             // "r" (RESET): r
             "r" => {
-                debug_log(LogLevel::Info, LogMode::Event, "Minitouch: RESET");
+                debug_log(LogLevel::Info, LogMode::Plain, "Minitouch: RESET");
 
                 window = refresh_window(window, &mut w_width, &mut w_height);
 
@@ -216,5 +216,6 @@ pub fn run_minitouch_daemon() {
         }
     }
 
-    debug_log(LogLevel::Info, LogMode::End, "Minitouch: stopped");
+    // The loop only ends when the pipe closes, which is MAA letting go.
+    debug_log(LogLevel::Info, LogMode::Event, "Minitouch: MAA gone, stopped");
 }

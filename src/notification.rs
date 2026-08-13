@@ -32,6 +32,7 @@ pub enum Notification {
     UpdateAvailable(String),
     UnsupportedClient(String),
     ClientMismatch(String, String),
+    GameNotInstalled(String),
     AdbInputUnsupported,
 }
 
@@ -40,9 +41,11 @@ impl Notification {
         match self {
             Self::Screenshot | Self::GpgShutdown | Self::WindowParked => LogLevel::Info,
 
-            Self::InternalResolution { .. } | Self::UnsupportedClient(..) | Self::ClientMismatch(..) | Self::AdbInputUnsupported => {
-                LogLevel::Warn
-            }
+            Self::InternalResolution { .. }
+            | Self::UnsupportedClient(..)
+            | Self::ClientMismatch(..)
+            | Self::GameNotInstalled(..)
+            | Self::AdbInputUnsupported => LogLevel::Warn,
 
             // Wrong render aspect ratio distorts everything MAA reads, so it ranks with the hard failures, not warnings.
             Self::ScreenshotFailed | Self::WindowWrongRatio(..) | Self::UnknownCommand(..) | Self::Panic(..) => LogLevel::Error,
@@ -90,7 +93,6 @@ impl Notification {
                 format!("Fatal error\n{}", msg),
                 format!("치명적인 오류 발생\n{}", msg),
             ),
-
             Self::UpdateAvailable(v) => (
                 format!("A new version is available ({})", v),
                 format!("신규 버전을 발견했어요 ({})", v),
@@ -102,6 +104,10 @@ impl Notification {
             Self::ClientMismatch(r, i) => (
                 format!("The requested client does not match the installed version\nPlease check 'Client' in MAA 'Game Settings'\nRequested: {}\nInstalled: {}", r, i),
                 format!("요청된 클라이언트와 설치된 클라이언트가 달라요\nMAA '실행 설정'에서 '클라이언트'를 확인해주세요\n요청됨: {}\n설치됨: {}", r, i),
+            ),
+            Self::GameNotInstalled(p) => (
+                format!("The game is not installed in Google Play Games\nPackage: {}", p),
+                format!("Google Play Games에 게임이 설치돼 있지 않아요\n패키지: {}", p),
             ),
             Self::AdbInputUnsupported => (
                 "ADB Input is not supported\nPlease switch to Minitouch".into(),
@@ -117,7 +123,11 @@ impl Notification {
 
     fn cooldown(&self) -> Option<u64> {
         match self {
-            Self::WindowWrongRatio(..) | Self::AdbInputUnsupported => Some(10),
+            Self::WindowWrongRatio(..)
+            | Self::AdbInputUnsupported
+            | Self::UnsupportedClient(..)
+            | Self::ClientMismatch(..)
+            | Self::GameNotInstalled(..) => Some(10),
             Self::WindowParked => Some(2),
             _ => None,
         }

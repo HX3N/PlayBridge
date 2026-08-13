@@ -8,6 +8,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::windows::process::CommandExt;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -18,7 +19,7 @@ use windows::Foundation::TypedEventHandler;
 use windows::Graphics::Capture::{Direct3D11CaptureFrame, Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession};
 use windows::Graphics::DirectX::Direct3D11::IDirect3DSurface;
 use windows::Graphics::DirectX::DirectXPixelFormat;
-use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, HMODULE, HWND, POINT, RECT};
+use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HMODULE, HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
@@ -32,7 +33,7 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
 use windows::Win32::System::WinRT::Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess};
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetClientRect, IsWindow, GA_ROOT};
@@ -42,25 +43,30 @@ use crate::config::{config, get_registry, set_registry, DISPLAY_HEIGHT, DISPLAY_
 use crate::logging::{debug_log, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification};
 use crate::shared::{CREATE_NO_WINDOW, DETACHED_PROCESS, KEY_DAEMON_PORT};
-use crate::window::{describe_window, ensure_game_ready, GameWindow};
+use crate::window::{describe_window, ensure_launcher, GameWindow};
 use crate::window_state::{adopt_stale_park, spawn_minimize_watcher, ActivationWatch, ParkState};
 
 const DAEMON_MUTEX: &str = "Local\\PlayBridgeWgcDaemon";
-const DAEMON_IDLE_SECS: u64 = 45;
+// MAA's lifetime ends the daemon; idling only drops capture to low power.
+const LOW_POWER_AFTER: Duration = Duration::from_secs(15);
+// Stays under FRAME_STALE so the first request after idling still gets a frame that counts as fresh.
+const LOW_POWER_INTERVAL: Duration = Duration::from_millis(500);
+const MAA_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 // How often the daemon normalizes the GPG window (restore/resize/rebind), independent of request rate.
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(50);
 // Arknights animates continuously, so a frame older than this means the window stopped composing.
 const FRAME_STALE: Duration = Duration::from_secs(1);
 // Upper bound on reusing a stale frame, for when the window is gone but its HWND lingers past IsWindow.
 const FRAME_REUSE_LIMIT: Duration = Duration::from_secs(30);
-// While no window is bound, retry the relaunch no more often than this — start_game_if_needed blocks ~1s per attempt.
-const RELAUNCH_COOLDOWN: Duration = Duration::from_secs(10);
 const IPC_CONNECT_TIMEOUT_MS: u64 = 500;
 // Client must wait out the full frame delivery before the ack (matches `nc -w 3`).
 const IPC_ACK_TIMEOUT_MS: u64 = 3000;
 
 // Render resolution last checked, keyed by value so a mid-session change re-fires; daemon-lifetime memory only.
 static RES_CHECK: Mutex<Option<(u32, u32)>> = Mutex::new(None);
+
+// The frame callback fires from WGC and has no other link to request activity.
+static LOW_POWER: AtomicBool = AtomicBool::new(false);
 
 // Ratio gates: a non-16:9 render is distorted, so it stops there rather than also flagging the resolution.
 fn check_render_resolution() {
@@ -130,6 +136,20 @@ fn to_winrt_device(d3d: &ID3D11Device) -> windows::core::Result<windows::Graphic
 fn create_item(hwnd: HWND) -> windows::core::Result<GraphicsCaptureItem> {
     let interop: IGraphicsCaptureItemInterop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
     unsafe { interop.CreateForWindow(hwnd) }
+}
+
+// Arknights animates nonstop, so frames keep arriving with nobody asking for them. Dropping them
+// here is what makes idling cheap: the GPU->CPU copy is the whole cost of a frame.
+fn skip_frame(last_processed: &Mutex<Instant>) -> bool {
+    if !LOW_POWER.load(Ordering::Relaxed) {
+        return false;
+    }
+    let mut last = last_processed.lock().unwrap();
+    if last.elapsed() < LOW_POWER_INTERVAL {
+        return true;
+    }
+    *last = Instant::now();
+    false
 }
 
 // Avoids a driver allocation and an ~8MB heap alloc on every captured frame.
@@ -364,15 +384,18 @@ impl WgcCapture {
             let device = device.clone();
             let context = context.clone();
             let work = Arc::new(Mutex::new(FrameWork::default()));
+            let last_processed = Arc::new(Mutex::new(Instant::now()));
             let handler = TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(move |sender, _| {
                 let sender = sender.ok()?;
                 if let Ok(frame) = sender.TryGetNextFrame() {
-                    let mut work = work.lock().unwrap();
-                    let FrameWork { staging, scratch } = &mut *work;
-                    if let Ok((w, h)) = process_frame(&device, &context, staging, scratch, &frame) {
-                        let filled = std::mem::take(scratch);
-                        let prev = latest.lock().unwrap().replace((filled, w, h, Instant::now()));
-                        *scratch = prev.map(|(buf, ..)| buf).unwrap_or_default();
+                    if !skip_frame(&last_processed) {
+                        let mut work = work.lock().unwrap();
+                        let FrameWork { staging, scratch } = &mut *work;
+                        if let Ok((w, h)) = process_frame(&device, &context, staging, scratch, &frame) {
+                            let filled = std::mem::take(scratch);
+                            let prev = latest.lock().unwrap().replace((filled, w, h, Instant::now()));
+                            *scratch = prev.map(|(buf, ..)| buf).unwrap_or_default();
+                        }
                     }
                     let _ = frame.Close();
                 }
@@ -428,11 +451,27 @@ impl WgcCapture {
     }
 }
 
-fn daemon_already_running() -> bool {
-    let name: Vec<u16> = DAEMON_MUTEX.encode_utf16().chain(Some(0)).collect();
+/// Claims the name for this process, so only a process that means to *be* the daemon may call it.
+pub fn already_running(mutex_name: &str) -> bool {
+    let name: Vec<u16> = mutex_name.encode_utf16().chain(Some(0)).collect();
     unsafe {
         let _ = CreateMutexW(None, false, PCWSTR(name.as_ptr()));
         GetLastError() == ERROR_ALREADY_EXISTS
+    }
+}
+
+/// Checks without claiming, which `already_running` cannot do: creating the mutex would make the
+/// caller its owner and every later check would report a daemon that never started.
+pub fn mutex_exists(mutex_name: &str) -> bool {
+    let name: Vec<u16> = mutex_name.encode_utf16().chain(Some(0)).collect();
+    match unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, PCWSTR(name.as_ptr())) } {
+        Ok(handle) => {
+            unsafe {
+                let _ = CloseHandle(handle);
+            }
+            true
+        }
+        Err(_) => false,
     }
 }
 
@@ -462,7 +501,7 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     // The DLL logs nothing, so record the access here.
     let mut portbuf = [0u8; 2];
     if stream.read_exact(&mut portbuf).is_err() {
-        debug_log(LogLevel::Info, LogMode::Event, "WgcDaemon: port access (probe, no request)");
+        debug_log(LogLevel::Info, LogMode::Plain, "Wgc: port access (probe, no request)");
         return;
     }
     let maa_port = u16::from_le_bytes(portbuf);
@@ -478,7 +517,9 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     // port == 0 is the byte-return verb (fake nemu DLL): hand the RGBA frame to the caller instead of MAA's nc port.
     // Response: [w: u32 LE][h: u32 LE][rgba...]; no fresh frame degrades to a black frame in the same format.
     let extras = maa_port == 0;
-    let (verb, mode, cost) = if extras { ("extras", LogMode::Event, "ipc_write") } else { ("rawbync", LogMode::Nested, "transmit") };
+    let (verb, cost) = if extras { ("extras", "ipc_write") } else { ("rawbync", "transmit") };
+    // A rawbync line belongs to the command process that asked for it; the daemon's own delivery stands alone.
+    let mode = if extras { LogMode::Plain } else { LogMode::Nested };
 
     let (rgba, timings) = match frame {
         Some((rgba, frame_age, crop_resize)) => (rgba, Some((frame_age, crop_resize))),
@@ -497,7 +538,7 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
             if reused { LogLevel::Warn } else { LogLevel::Info },
             mode,
             &format!(
-                "WgcDaemon: {} {} in {} ms (age {} ms, crop+resize {} ms, {} {} ms)",
+                "Wgc: {} {} in {} ms (age {} ms, crop+resize {} ms, {} {} ms)",
                 verb,
                 if reused { "stale frame reused" } else { "delivered" },
                 t0.elapsed().as_millis(),
@@ -507,7 +548,11 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
                 t1.elapsed().as_millis()
             ),
         ),
-        None => debug_log(LogLevel::Warn, LogMode::Event, &format!("WgcDaemon: {} no fresh frame, sent black frame", verb)),
+        None => {
+            debug_log(LogLevel::Warn, mode, &format!("Wgc: {} no fresh frame, sent black frame", verb));
+            // MAA asked for the screen and there is none, which is the one moment worth starting the game.
+            ensure_launcher();
+        }
     }
 
     // Only RawByNc's client waits on an ack; the byte-return verb already has its answer in the frame.
@@ -515,19 +560,16 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
         let _ = stream.write_all(&[1u8]);
     }
 }
-/// Returns true when the window is gone and the daemon should exit.
 /// `building` guards against launching more than one worker build, and the old capture keeps serving until
 /// the new one lands.
 fn maintain(
     cap: &mut Option<WgcCapture>,
     park: &mut ParkState,
     activation: &mut ActivationWatch,
-    last_relaunch: &mut Option<Instant>,
     build_tx: &mpsc::Sender<AssertSend<Option<WgcCapture>>>,
     building: &mut bool,
-) -> bool {
+) {
     // IsWindow stays true for a hidden-but-alive GPG tree; fresh frames are the real liveness signal.
-    // While they flow reuse the cached child; once they stall past FRAME_STALE, re-verify via window.rs's title search.
     let w = match cap.as_ref() {
         Some(c) if c.latest_frame_age().is_some_and(|age| age < FRAME_STALE) => Some(GameWindow { hwnd: c.child() }),
         _ => GameWindow::find(),
@@ -535,16 +577,10 @@ fn maintain(
 
     match w {
         None => {
-            // find() miss with a bound capture means the window is really gone, so exit and let a fresh daemon rebind after relaunch.
-            // cap == None is the startup/post-exit wait — relaunch instead of exiting.
+            // Starting the game belongs to the launcher, so this only waits for the window to return.
             if cap.is_some() {
-                debug_log(LogLevel::Warn, LogMode::Event, "WgcDaemon: window gone, exiting");
-                return true;
-            }
-            // This runs only while the window is down, so the ~1s launch wait never lands inside a benchmark capture.
-            if last_relaunch.is_none_or(|t| t.elapsed() >= RELAUNCH_COOLDOWN) {
-                *last_relaunch = Some(Instant::now());
-                ensure_game_ready();
+                debug_log(LogLevel::Warn, LogMode::Event, "Wgc: window gone, waiting");
+                *cap = None;
             }
         }
         Some(w) => {
@@ -560,13 +596,13 @@ fn maintain(
             }
         }
     }
-    false
 }
 
 /// Long-lived daemon process (`--wgc-daemon`).
-/// Single instance; serves the latest frame to thin clients and self-exits when idle or the window is gone.
+/// Single instance; serves the latest frame to thin clients and lives as long as the MAA that spawned it.
 pub fn run_daemon() {
-    if daemon_already_running() {
+    if already_running(DAEMON_MUTEX) {
+        debug_log(LogLevel::Info, LogMode::End, "Wgc: already running");
         return;
     }
 
@@ -577,7 +613,7 @@ pub fn run_daemon() {
     let listener = match TcpListener::bind(("127.0.0.1", 0)) {
         Ok(l) => l,
         Err(e) => {
-            debug_log(LogLevel::Error, LogMode::Event, &format!("WgcDaemon: bind failed: {}", e));
+            debug_log(LogLevel::Error, LogMode::End, &format!("Wgc: bind failed: {}", e));
             return;
         }
     };
@@ -586,7 +622,7 @@ pub fn run_daemon() {
         Err(_) => return,
     };
     let _ = set_registry(KEY_DAEMON_PORT, port as u32, REG_PATH_STATE);
-    debug_log(LogLevel::Info, LogMode::End, &format!("WgcDaemon: started / awaiting handshake (127.0.0.1:{})", port));
+    debug_log(LogLevel::Info, LogMode::End, &format!("Wgc: started / awaiting handshake (127.0.0.1:{})", port));
 
     adopt_stale_park();
     spawn_minimize_watcher();
@@ -614,13 +650,14 @@ pub fn run_daemon() {
 
     let mut last_active = Instant::now();
     let mut last_maint = Instant::now();
-    let mut last_relaunch: Option<Instant> = None;
+    let mut last_maa_check = Instant::now();
+    let mut maa_gone = false;
     loop {
         // Clear the flag on either outcome so a failed build is retried on the next tick, not left stuck.
         if let Ok(AssertSend(built)) = build_rx.try_recv() {
             building = false;
             if let Some(c) = built {
-                debug_log(LogLevel::Info, LogMode::Event, &format!("WgcDaemon: bound {}", describe_window(c.child(), Some(c.top))));
+                debug_log(LogLevel::Info, LogMode::Event, &format!("Wgc: bound {}", describe_window(c.child(), Some(c.top))));
                 check_render_resolution();
                 cap = Some(c);
             }
@@ -628,24 +665,32 @@ pub fn run_daemon() {
 
         match rx.recv_timeout(MAINTENANCE_INTERVAL) {
             Ok(stream) => {
+                if LOW_POWER.swap(false, Ordering::Relaxed) {
+                    debug_log(LogLevel::Info, LogMode::Event, "Wgc: request in, back to full rate");
+                }
                 handle_client(stream, cap.as_ref());
                 last_active = Instant::now();
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                if last_active.elapsed() > Duration::from_secs(DAEMON_IDLE_SECS) {
-                    debug_log(LogLevel::Info, LogMode::Event, "WgcDaemon: idle timeout, exiting");
-                    break;
+                if last_active.elapsed() > LOW_POWER_AFTER && !LOW_POWER.swap(true, Ordering::Relaxed) {
+                    debug_log(LogLevel::Info, LogMode::Event, "Wgc: idle, dropping to low power");
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
 
+        if last_maa_check.elapsed() >= MAA_CHECK_INTERVAL {
+            last_maa_check = Instant::now();
+            if !crate::maa::is_alive() {
+                maa_gone = true;
+                break;
+            }
+        }
+
         // Runs outside the recv branch so maintenance still ticks while a busy MAA keeps recv_timeout returning Ok.
         if last_maint.elapsed() >= MAINTENANCE_INTERVAL {
             last_maint = Instant::now();
-            if maintain(&mut cap, &mut park, &mut activation, &mut last_relaunch, &build_tx, &mut building) {
-                break;
-            }
+            maintain(&mut cap, &mut park, &mut activation, &build_tx, &mut building);
         }
     }
 
@@ -658,7 +703,8 @@ pub fn run_daemon() {
     }
 
     let _ = set_registry(KEY_DAEMON_PORT, 0u32, REG_PATH_STATE);
-    debug_log(LogLevel::Info, LogMode::End, "WgcDaemon: stopped");
+    let farewell = if maa_gone { "Wgc: MAA gone, stopped" } else { "Wgc: stopped" };
+    debug_log(LogLevel::Info, LogMode::Event, farewell);
 }
 
 pub fn ensure_daemon() {
