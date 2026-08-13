@@ -33,15 +33,17 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Graphics::Gdi::{ClientToScreen, MonitorFromWindow, MONITOR_DEFAULTTONULL};
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::System::Threading::{AttachThreadInput, CreateMutexW, GetCurrentThreadId};
 use windows::Win32::System::WinRT::Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess};
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
+use windows::Win32::UI::Input::KeyboardAndMouse::SetActiveWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetAncestor, GetClientRect, GetForegroundWindow, GetMessageW, GetSystemMetrics, GetWindowPlacement, GetWindowRect,
-    IsIconic, IsWindow, SetWindowPlacement, SetWindowPos, ShowWindow, TranslateMessage, EVENT_SYSTEM_FOREGROUND,
-    EVENT_SYSTEM_MINIMIZESTART, GA_ROOT, MSG, SM_CYVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_MINIMIZE,
-    SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WINEVENT_OUTOFCONTEXT,
+    CreateWindowExW, DispatchMessageW, GetAncestor, GetClientRect, GetForegroundWindow, GetGUIThreadInfo, GetMessageW, GetSystemMetrics,
+    GetWindowPlacement, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindow, SetWindowPlacement, SetWindowPos, ShowWindow,
+    TranslateMessage, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZESTART, GA_ROOT, GUITHREADINFO, MSG, SM_CYVIRTUALSCREEN,
+    SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_MINIMIZE, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, WINDOWPLACEMENT,
+    WINDOW_EX_STYLE, WINEVENT_OUTOFCONTEXT, WS_POPUP,
 };
 
 use crate::capture::{black_frame_pixels, resize_to_display, transmit_pixels_nc};
@@ -842,12 +844,106 @@ fn adopt_stale_park() {
     debug_log(LogLevel::Warn, LogMode::Event, &format!("Park: adopted stale record, restored to ({},{})", x, y));
 }
 
+// A window still holding its queue's active window while the foreground sits elsewhere never receives
+// another activation, so it never rebuilds the path that hands clicks to the guest.
+const ACTIVATION_REPAIR_DELAY: Duration = Duration::from_millis(500);
+const ACTIVATION_REPAIR_ATTEMPTS: u32 = 3;
+
+fn activation_is_stale(top: HWND) -> bool {
+    let thread = unsafe { GetWindowThreadProcessId(top, None) };
+    if thread == 0 {
+        return false;
+    }
+
+    let mut info = GUITHREADINFO { cbSize: std::mem::size_of::<GUITHREADINFO>() as u32, ..Default::default() };
+    if unsafe { GetGUIThreadInfo(thread, &mut info) }.is_err() {
+        return false;
+    }
+
+    let foreground = unsafe { GetForegroundWindow() };
+    let owns_foreground = !foreground.0.is_null() && unsafe { GetAncestor(foreground, GA_ROOT) }.0 == top.0;
+
+    !info.hwndActive.0.is_null() && !owns_foreground
+}
+
+// SetActiveWindow needs a window owned by the calling thread to move activation onto.
+fn create_activation_helper() -> Option<HWND> {
+    let class: Vec<u16> = "STATIC".encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        CreateWindowExW(WINDOW_EX_STYLE::default(), PCWSTR(class.as_ptr()), PCWSTR::null(), WS_POPUP, 0, 0, 0, 0, None, None, None, None)
+    }
+    .ok()
+}
+
+// Sharing the queue makes the daemon a legal SetActiveWindow caller there, so the kernel delivers the
+// deactivation itself. The foreground is never touched.
+fn deactivate_via_queue(top: HWND, helper: HWND) -> bool {
+    let gpg_thread = unsafe { GetWindowThreadProcessId(top, None) };
+    if gpg_thread == 0 {
+        return false;
+    }
+    let ours = unsafe { GetCurrentThreadId() };
+    if !unsafe { AttachThreadInput(ours, gpg_thread, true) }.as_bool() {
+        return false;
+    }
+    let moved = unsafe { SetActiveWindow(helper) }.is_ok();
+    let _ = unsafe { AttachThreadInput(ours, gpg_thread, false) };
+    moved
+}
+
+struct ActivationWatch {
+    stale_since: Option<Instant>,
+    repairs: u32,
+    helper: Option<HWND>,
+}
+
+impl ActivationWatch {
+    fn new() -> Self {
+        Self { stale_since: None, repairs: 0, helper: None }
+    }
+
+    fn update(&mut self, top: HWND) {
+        if !activation_is_stale(top) {
+            if self.repairs > 0 {
+                debug_log(LogLevel::Info, LogMode::Event, "Activation: cleared");
+            }
+            self.stale_since = None;
+            self.repairs = 0;
+            return;
+        }
+
+        // A handover to another window passes through this state, so only one that outlives it is repaired.
+        let stale_since = *self.stale_since.get_or_insert_with(Instant::now);
+        if stale_since.elapsed() < ACTIVATION_REPAIR_DELAY || self.repairs >= ACTIVATION_REPAIR_ATTEMPTS {
+            return;
+        }
+
+        if self.helper.is_none() {
+            self.helper = create_activation_helper();
+        }
+        let moved = self.helper.is_some_and(|helper| deactivate_via_queue(top, helper));
+
+        // Restarted so the next attempt waits out the delay again instead of firing on the following tick.
+        self.stale_since = Some(Instant::now());
+        self.repairs += 1;
+        debug_log(
+            LogLevel::Warn,
+            LogMode::Event,
+            &format!(
+                "Activation: stale active window, queue deactivation ({}/{}, moved {})",
+                self.repairs, ACTIVATION_REPAIR_ATTEMPTS, moved
+            ),
+        );
+    }
+}
+
 /// Returns true when the window is gone and the daemon should exit.
 /// `building` guards against launching more than one worker build, and the old capture keeps serving until
 /// the new one lands.
 fn maintain(
     cap: &mut Option<WgcCapture>,
     park: &mut ParkState,
+    activation: &mut ActivationWatch,
     last_relaunch: &mut Option<Instant>,
     build_tx: &mpsc::Sender<AssertSend<Option<WgcCapture>>>,
     building: &mut bool,
@@ -877,6 +973,7 @@ fn maintain(
             let top = unsafe { GetAncestor(w.hwnd, GA_ROOT) };
             park.update(top);
             park.arm_hook(top);
+            activation.update(top);
 
             let needs_rebind = cap.as_ref().map(|c| w.hwnd != c.child() || w.get_client_size() != c.bound_client()).unwrap_or(true);
             if needs_rebind && !*building {
@@ -919,6 +1016,7 @@ pub fn run_daemon() {
     let (build_tx, build_rx) = mpsc::channel::<AssertSend<Option<WgcCapture>>>();
     let mut cap: Option<WgcCapture> = None;
     let mut park = ParkState::new();
+    let mut activation = ActivationWatch::new();
     let mut building = false;
 
     // Blocking accept on a dedicated thread feeding a channel: zero accept latency.
@@ -967,7 +1065,7 @@ pub fn run_daemon() {
         // Runs outside the recv branch so maintenance still ticks while a busy MAA keeps recv_timeout returning Ok.
         if last_maint.elapsed() >= MAINTENANCE_INTERVAL {
             last_maint = Instant::now();
-            if maintain(&mut cap, &mut park, &mut last_relaunch, &build_tx, &mut building) {
+            if maintain(&mut cap, &mut park, &mut activation, &mut last_relaunch, &build_tx, &mut building) {
                 break;
             }
         }
