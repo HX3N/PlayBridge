@@ -17,6 +17,9 @@ use std::time::Duration;
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::RegKey;
 
+mod shared;
+use shared::{CREATE_NO_WINDOW, DETACHED_PROCESS, DISPLAY_HEIGHT, DISPLAY_WIDTH, KEY_DAEMON_PORT, KEY_EXE_PATH, REG_PATH_STATE};
+
 // Guards FreeLibrary from racing live captures.
 static INFLIGHT: AtomicI32 = AtomicI32::new(0);
 
@@ -27,31 +30,22 @@ static CACHED_PORT: AtomicU32 = AtomicU32::new(0);
 // Frame staging buffer, reused so a capture doesn't allocate and zero ~3.7MB per call.
 static FRAME_BUF: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 
-// Must match src/config.rs (REG_PATH_STATE) and src/wgc.rs (DAEMON_PORT_KEY)
-// and the EXE_PATH key written by src/main.rs.
-const REG_STATE: &str = r"Software\PlayBridge\state";
-const KEY_DAEMON_PORT: &str = "WGC_DAEMON_PORT";
-const KEY_EXE_PATH: &str = "EXE_PATH";
-
-// Must match src/config.rs DISPLAY_WIDTH / DISPLAY_HEIGHT (the daemon resizes to this,
-// and MAA's reported `wm size` matches it so click coords line up).
-const WIDTH: u32 = 1280;
-const HEIGHT: u32 = 720;
-
 // IPC timeouts. The daemon writes ~3.7MB over localhost; give the read room.
 const CONNECT_WRITE_TIMEOUT_MS: u64 = 500;
 const READ_TIMEOUT_MS: u64 = 3000;
 const FRAME_RETRY_COUNT: usize = 3;
 const FRAME_RETRY_DELAY_MS: u64 = 16;
+// Ceiling on a frame announced by the daemon, so a corrupt header cannot drive a huge allocation.
+const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 
 fn reg_read_dword(key: &str) -> Option<u32> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    hkcu.open_subkey(REG_STATE).ok()?.get_value(key).ok()
+    hkcu.open_subkey(REG_PATH_STATE).ok()?.get_value(key).ok()
 }
 
 fn reg_read_string(key: &str) -> Option<String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    hkcu.open_subkey(REG_STATE).ok()?.get_value(key).ok()
+    hkcu.open_subkey(REG_PATH_STATE).ok()?.get_value(key).ok()
 }
 
 fn connect_daemon() -> Option<TcpStream> {
@@ -73,8 +67,6 @@ fn connect_daemon() -> Option<TcpStream> {
 }
 
 fn spawn_daemon(exe: &str) {
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let _ = std::process::Command::new(exe)
         .arg("--wgc-daemon")
         .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
@@ -112,7 +104,7 @@ fn request_frame(buf: &mut Vec<u8>) -> bool {
     let Some(len) = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(4)) else {
         return false;
     };
-    if len == 0 || len > 64 * 1024 * 1024 {
+    if len == 0 || len > MAX_FRAME_BYTES {
         return false;
     }
 
@@ -172,17 +164,17 @@ pub unsafe extern "C" fn nemu_capture_display(
     pixels: *mut u8,
 ) -> i32 {
     if !width.is_null() {
-        *width = WIDTH as i32;
+        *width = DISPLAY_WIDTH as i32;
     }
     if !height.is_null() {
-        *height = HEIGHT as i32;
+        *height = DISPLAY_HEIGHT as i32;
     }
 
     if buffer_size == 0 {
         return 0;
     }
 
-    let needed = (WIDTH * HEIGHT * 4) as usize;
+    let needed = (DISPLAY_WIDTH * DISPLAY_HEIGHT * 4) as usize;
     if pixels.is_null() || buffer_size < 0 || (buffer_size as usize) < needed {
         return 1;
     }
@@ -206,10 +198,10 @@ pub unsafe extern "C" fn nemu_capture_display(
 }
 
 /// # Safety
-/// `pixels` must point to a buffer of at least `WIDTH * HEIGHT * 4` bytes.
+/// `pixels` must point to a buffer of at least `DISPLAY_WIDTH * DISPLAY_HEIGHT * 4` bytes.
 unsafe fn write_frame_bottom_up(frame: Option<&[u8]>, pixels: *mut u8) {
-    let row = (WIDTH * 4) as usize;
-    let h = HEIGHT as usize;
+    let row = (DISPLAY_WIDTH * 4) as usize;
+    let h = DISPLAY_HEIGHT as usize;
     let frame = frame.filter(|f| f.len() >= row * h);
 
     for y in 0..h {

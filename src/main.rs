@@ -5,9 +5,11 @@ mod config;
 mod input;
 mod logging;
 mod notification;
+mod shared;
 mod store;
 mod wgc;
 mod window;
+mod window_state;
 
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 
@@ -33,7 +35,7 @@ fn main() {
 
     // Publish exe path so the fake nemu DLL can spawn the WGC daemon.
     if let Ok(exe) = env::current_exe() {
-        let _ = config::set_registry("EXE_PATH", exe.to_string_lossy().as_ref(), config::REG_PATH_STATE);
+        let _ = config::set_registry(shared::KEY_EXE_PATH, exe.to_string_lossy().as_ref(), config::REG_PATH_STATE);
     }
 
     if args.iter().any(|a| a == "--wgc-daemon") {

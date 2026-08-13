@@ -9,13 +9,11 @@ use winreg::{
 use crate::logging::{debug_log, LogLevel, LogMode};
 use crate::notification::{display_notification, Notification};
 
-pub const DISPLAY_WIDTH: u32 = 1280;
-pub const DISPLAY_HEIGHT: u32 = 720;
+pub use crate::shared::{DISPLAY_HEIGHT, DISPLAY_WIDTH, REG_PATH_STATE};
 
 const REPOSITORY_URL: &str = "https://api.github.com/repos/HX3N/PlayBridge/releases/latest";
 
 pub const REG_PATH_CONFIG: &str = r"Software\PlayBridge\config";
-pub const REG_PATH_STATE: &str = r"Software\PlayBridge\state";
 pub const REG_PATH_COOLDOWN: &str = r"Software\PlayBridge\cooldown";
 pub const UPDATE_CHECK_COOLDOWN: u64 = 60 * 60 * 24;
 
