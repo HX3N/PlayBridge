@@ -52,8 +52,9 @@ DLL — the nemu input exports are stubs; real input is Win32 `PostMessage` to t
 the minitouch daemon.
 
 The daemon also owns the GPG window's state, not just its pixels: it normalizes the window every maintenance
-tick, relaunches the game when it is gone, and intercepts minimize so capture never stops (see _Window
-parking_).
+tick, relaunches the game when it is gone, intercepts minimize so capture never stops (see _Window parking_),
+and clears an activation the window failed to release (see _Stale activation_). Both live in
+`src/window_state.rs`; `src/wgc.rs` keeps the capture pipeline.
 
 Beyond connect/screencap, the bin handles a few one-shot ADB commands (`execute_command`):
 
@@ -96,6 +97,10 @@ with whatever keeps MAA moving forward. Call stack on MAA's side:
 | 9   | `push <minitouch> /data/local/tmp/<uuid>`                                      | `Ignore`                  | silent (no upload needed)                                                     |
 | 10  | `chmod 700 /data/local/tmp/<uuid>`                                             | `Ignore`                  | silent                                                                        |
 | 11  | `shell /data/local/tmp/<uuid> -i`                                              | _(main.rs `-i` branch)_   | `input::run_minitouch_daemon()` — resident, reads minitouch commands on stdin |
+
+MAA starts minitouch (#11) as soon as connect returns, which can be before the game window exists. The
+handshake has already told MAA the daemon is up by then, so it never exits on a missing window — it binds on
+the first commit that finds one and skips commits until then.
 
 After connect returns, MAA benchmarks its screencap modes (RawByNc, RawWithGzip, Encode, PlayExtras DLL) and
 locks onto the fastest. See _Benchmark one-shot_ for how PlayBridge keeps that measurement fair.
@@ -155,8 +160,10 @@ The bin and the DLL are separate processes; all persistent state lives under `HK
 | `…\config`           | `LAST_UPDATE_CHECK`  | bin                     | bin                      | GitHub release check throttle (24 h)                       |
 | `…\cooldown`         | `<notification tag>` | bin                     | bin                      | per-toast throttle timestamps (`display_notification`)     |
 
-`src/lib.rs` hardcodes `REG_STATE`, `KEY_DAEMON_PORT`, and `KEY_EXE_PATH` rather than importing them (the cdylib
-doesn't share the bin's modules) — **these must stay in sync with `config.rs` and `wgc.rs`.**
+The cdylib doesn't share the bin's modules, but both crate roots sit in `src/`, so each declares
+`mod shared;` over `src/shared.rs` — the single definition of the `…\state` path, its key names, the
+1280x720 display size, and the daemon's spawn flags. A value that drifts is a compile error, not a
+silent mismatch.
 
 ## WGC daemon lifecycle
 
@@ -183,6 +190,8 @@ See `src/wgc.rs` for the capture/crop/resize details (notably `crop_region`, whi
 DWM leaves transparent).
 
 ## Window parking (minimize mimicry)
+
+Implemented in `src/window_state.rs`.
 
 WGC stops delivering frames the moment a window is genuinely minimized, which would stall MAA for as long as
 the user keeps GPG out of the way. Instead of rejecting the minimize, the daemon **fakes** it: the window stays
@@ -216,3 +225,17 @@ first, fix `rcNormalPosition` by delta after, so the animation never plays at th
 
 Parking raises a `WindowParked` toast once per park (2 s cooldown), replacing the older "minimized windows are
 not supported" message.
+
+## Stale activation
+
+Also in `src/window_state.rs`. A relaunched GPG window can keep the active window of its input queue after the
+foreground has moved to another app. Because it still counts itself as active, clicking it back to the
+foreground produces no activation, so it never rebuilds the path that hands clicks to the guest: MAA's
+`PostMessage` input and the user's own clicks are both dropped while capture keeps working, since the window
+still composes. Clicking *away* and back is the manual cure — the click away is what finally deactivates it.
+
+`ActivationWatch` polls on the maintenance tick and treats "active window set while the foreground is
+elsewhere" as the signature. A genuine deactivation passes through that state for ~90 ms, so only one that
+outlives `ACTIVATION_REPAIR_DELAY` (500 ms) is repaired, at most three times. The repair attaches the daemon's
+thread to GPG's input queue (`AttachThreadInput`) and calls `SetActiveWindow` on a hidden helper window, so the
+kernel delivers the missed deactivation. The foreground is never touched, so nothing moves on screen.
