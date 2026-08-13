@@ -135,6 +135,28 @@ delivery is logged at `Warn` as a reuse. Past that bound, or with nothing captur
 to a black frame in the same format. If the daemon isn't running at all, `ScreencapNc` spawns it and answers
 that one request with a black frame itself; the next request hits the warm daemon.
 
+## Finding the game window
+
+Everything that captures or types — the WGC daemon, the minitouch daemon, the one-shot commands — reaches the
+game through `GameWindow::find()` (`src/window.rs`). GPG nests the render surface two levels down:
+
+```
+HwndWrapper[DefaultDomain;;<guid>]   top-level, owned by crosvm.exe, titled "<game name> - <doctor>"
+  └ CROSVM_1                         what PlayBridge binds to (capture, PostMessage input)
+      └ subWin
+```
+
+The search makes **one** pass over `window_list()` and puts each window through two gates: its title must start
+with one of the three client names (`명일방주` / `アークナイツ` / `Arknights`), and it must own a direct `CROSVM_1`
+child. The first window clearing both yields the child handle *and* the client the title identified — finding
+the window and identifying the region are the same step, which is why nothing has to be searched per client.
+
+Both gates carry weight. The title prefix is what keeps a GPG session running some *other* game from being
+handed to MAA, and it absorbs the `<game name> - <doctor>` suffix. The `CROSVM_1` check is what rejects GPG's
+own chrome. And the pass leans on `window_list()` yielding only visible, titled windows: GPG keeps four more
+top-levels of the same class, each with a `CROSVM_1` child of its own, but all four are invisible 12x12 stubs
+with empty titles and never reach the filter.
+
 ## Client selection and launch
 
 `adb devices` is where the client (EN/KR/JP) is first **proposed**, not where it is settled. Only that process
@@ -142,7 +164,7 @@ has MAA as its parent, so `src/maa.rs` walks up to it (`CreateToolhelp32Snapshot
 reads `<MAA>/config/gui.new.json` and takes `Configurations[<Current>].Gui.RuntimeSettings.ClientType`. MAA's
 `Official`, `Bilibili` and `Txwy` have no Google Play Games package, so they raise an `UnsupportedClient` toast
 and nothing is launched — and nothing is stored either, so `CLIENT` keeps whatever it already held. An
-unreadable config falls back to the window-title scan in `GameWindow::find()`.
+unreadable config leaves the client to `GameWindow::find()` (see _Finding the game window_).
 
 The same handler stores the resolved client in `CLIENT` and MAA's PID in `MAA_PID`. That is how the daemons
 learn both — they are spawned `DETACHED_PROCESS`, so they cannot walk up to MAA themselves.
@@ -152,17 +174,16 @@ with it for the whole session. Two later points correct `CLIENT` against what is
 preconditions are exclusive: a running window rules the store lookup out, because the launcher exits at
 "game already up" before reaching it.
 
-| Evidence                          | Where                                                        | Precondition |
-| --------------------------------- | ------------------------------------------------------------ | ------------ |
-| the window that is really up      | `GameWindow::find()` fallback → `adopt_running_client`        | GPG running  |
-| GPG's own install record          | `run_launcher_daemon` → `adopt_installed_client`              | GPG closed   |
+| Evidence                     | Where                                             | Precondition |
+| ---------------------------- | ------------------------------------------------- | ------------ |
+| the window that is really up | `GameWindow::find` → `adopt_running_client`       | GPG running  |
+| GPG's own install record     | `run_launcher_daemon` → `adopt_installed_client`  | GPG closed   |
 
-`GameWindow::find()` matches titles by prefix, so `명일방주` and `명일방주.*` are the same client and never reach
-the fallback. Reaching it means no window carries the configured client's title at all, and a hit there is a
-different client — the running game wins. The launcher's lookup instead asks `store::app_record` for each of the
-other two clients and claims one only when exactly one answers; two installed side by side is assumed not to
-happen and is not guessed at. Both write `CLIENT` before raising their `ClientMismatch` toast, because
-`notification.rs` picks the toast's language from that same value.
+The window search already reports which client's title it matched, so `adopt_running_client` takes that as the
+truth and rewrites `CLIENT`; it returns early when the two agree, which is the ordinary case. The launcher's
+lookup instead asks `store::app_record` for each of the other two clients and claims one only when exactly one
+answers; two installed side by side is assumed not to happen and is not guessed at. Both write `CLIENT` before
+raising their `ClientMismatch` toast, because `notification.rs` picks the toast's language from that same value.
 
 A corrected `CLIENT` is also what makes `apply_intent_package` speak up: MAA keeps sending the intent for the
 client it still believes in, which now contradicts the stored one and raises `ClientMismatch` on its own.
@@ -219,7 +240,7 @@ silent mismatch.
 - A dedicated accept thread feeds a channel for zero accept latency; the main loop also runs a **maintenance
   tick** every 50 ms (`maintain`) that unparks/rebinds the window. Fresh frames, not `IsWindow`, are the
   liveness signal: while frames flow the bound child is reused, and once they stall past 1 s the window is
-  re-verified through `window.rs`'s title search.
+  re-verified through `GameWindow::find()` (see _Finding the game window_).
 - **Rebinds build off the serve thread**: constructing a `WgcCapture` is the one slow step, so `spawn_build` runs
   it on a worker (`building` guards against duplicates) and the old capture keeps serving until the new one lands.
   A rebind is triggered by a changed child HWND *or* a changed client size — the frame pool is fixed to the

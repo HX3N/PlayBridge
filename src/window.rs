@@ -44,25 +44,14 @@ pub struct GameWindow {
 
 impl GameWindow {
     pub fn find() -> Option<Self> {
-        let windows = window_list().ok()?;
-        let current_title = config().client.title();
+        let (hwnd, client) = window_list().ok()?.into_iter().find_map(|win| {
+            let client = resolve_client_by_title(&win.window_name)?;
+            let child = find_crosvm_child(HWND(win.hwnd as usize as *mut c_void))?;
+            Some((child, client))
+        })?;
 
-        if !current_title.is_empty() {
-            if let Some(hwnd) = match_window_by_title(&windows, current_title) {
-                return Some(Self { hwnd });
-            }
-        }
-
-        for client in [Client::KR, Client::JP, Client::EN] {
-            if client.title() != current_title {
-                if let Some(hwnd) = match_window_by_title(&windows, client.title()) {
-                    adopt_running_client(client);
-                    return Some(Self { hwnd });
-                }
-            }
-        }
-
-        None
+        adopt_running_client(client);
+        Some(Self { hwnd })
     }
 
     pub fn restore(&self) {
@@ -87,6 +76,9 @@ impl GameWindow {
 /// Notification language is picked by the stored client, so the update lands before the toast.
 fn adopt_running_client(client: Client) {
     let previous = config().client;
+    if previous == client {
+        return;
+    }
     set_client(client);
 
     if previous != Client::Empty {
@@ -223,21 +215,8 @@ fn resolve_client(package: &str) -> Option<Client> {
         .find(|&client| package.starts_with(client.package()))
 }
 
-fn match_window_by_title(windows: &[HwndName], title: &str) -> Option<HWND> {
-    windows.iter().filter(|w| w.window_name.starts_with(title)).find_map(|win| {
-        let hwnd = HWND(win.hwnd as usize as *mut c_void);
-        let class_name = get_window_class(hwnd)?;
-
-        // Old: CROSVM_1 > subWin
-        // New: HwndWrapper > CROSVM_1 > subWin
-        if class_name == CROSVM_CLASS {
-            Some(hwnd)
-        } else if class_name.starts_with(WRAPPER_CLASS) {
-            find_crosvm_child(hwnd)
-        } else {
-            None
-        }
-    })
+fn resolve_client_by_title(title: &str) -> Option<Client> {
+    [Client::KR, Client::JP, Client::EN].into_iter().find(|&client| title.starts_with(client.title()))
 }
 
 fn find_crosvm_child(parent_hwnd: HWND) -> Option<HWND> {
