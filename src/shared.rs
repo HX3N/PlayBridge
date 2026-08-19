@@ -7,6 +7,8 @@ pub const KEY_EXE_PATH: &str = "EXE_PATH";
 /// The MAA that ran `devices`. The daemon has no other way to tell that MAA is gone.
 #[allow(dead_code)]
 pub const KEY_MAA_PID: &str = "MAA_PID";
+#[allow(dead_code)]
+pub const KEY_LOG_DEPTH: &str = "LOG_DEPTH";
 
 /// The daemon resizes to this, and MAA's reported `wm size` matches it so click coordinates line up.
 pub const DISPLAY_WIDTH: u32 = 1280;

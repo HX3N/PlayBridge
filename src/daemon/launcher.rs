@@ -21,7 +21,7 @@ const WRAPPER_CLASS: &str = "HwndWrapper";
 const LOADING_TITLE: &str = "Google Play Games";
 
 pub const LAUNCHER_ARG: &str = "--launcher-daemon";
-const LAUNCHER_MUTEX: &str = "Local\\PlayBridgeLauncher";
+pub const LAUNCHER_MUTEX: &str = "Local\\PlayBridgeLauncher";
 // Upper bound on one launch attempt, after which the game is treated as unreachable and the next
 // capture request gets to start a fresh launcher rather than this one retrying forever.
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(180);
@@ -53,17 +53,23 @@ pub fn apply_intent_package(intent: &str) -> bool {
     let package = intent.split('/').next().unwrap_or(intent);
 
     if config().client.package() == package {
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Client: intent matches {}", package));
+        debug_log(LogLevel::Info, LogMode::Plain, &format!("Client: intent matches {}", package));
         return true;
     }
 
     let Some(client) = resolve_client(package) else {
+        debug_log(LogLevel::Warn, LogMode::Plain, &format!("Client: unsupported package {}", package));
         display_notification(Notification::UnsupportedClient(package.to_string()));
         return false;
     };
 
     let current_client = config().client;
     if current_client != Client::Empty && current_client != client {
+        debug_log(
+            LogLevel::Warn,
+            LogMode::Plain,
+            &format!("Client: intent {} contradicts configured {}", client.package(), current_client.package()),
+        );
         display_notification(Notification::ClientMismatch(client.package().to_string(), current_client.package().to_string()));
         return false;
     }
@@ -86,30 +92,30 @@ pub fn ensure_launcher() {
 /// capture and input simply find no window until it exits.
 pub fn run_launcher_daemon() {
     if already_running(LAUNCHER_MUTEX) {
-        debug_log(LogLevel::Info, LogMode::End, "Launcher: already running");
+        debug_log(LogLevel::Info, LogMode::Plain, "Launcher: already running");
         return;
     }
     if GameWindow::find().is_some() {
-        debug_log(LogLevel::Info, LogMode::End, "Launcher: game already up");
+        debug_log(LogLevel::Info, LogMode::Plain, "Launcher: game already up");
         return;
     }
 
     let package = config().client.package();
     if package.is_empty() {
-        debug_log(LogLevel::Warn, LogMode::End, "Launcher: no client set");
+        debug_log(LogLevel::Warn, LogMode::Plain, "Launcher: no client set");
         return;
     }
 
     // Without this the launch URI only raises GPG's own window, which reads as a loading screen forever.
     let Some(app) = crate::sys::store::app_record(package).or_else(adopt_installed_client) else {
         display_notification(Notification::GameNotInstalled(package.to_string()));
-        debug_log(LogLevel::Warn, LogMode::End, "Launcher: game not installed");
+        debug_log(LogLevel::Warn, LogMode::Plain, "Launcher: game not installed");
         return;
     };
-    debug_log(LogLevel::Info, LogMode::Nested, &format!("Store: {}", app.describe()));
+    debug_log(LogLevel::Info, LogMode::Plain, &format!("Store: {}", app.describe()));
 
     let package = config().client.package();
-    debug_log(LogLevel::Info, LogMode::Nested, &format!("Launcher: waiting for {}", package));
+    debug_log(LogLevel::Info, LogMode::Start, &format!("Launcher: waiting for {}", package));
 
     let started = Instant::now();
     let mut last_launch: Option<Instant> = None;
@@ -133,14 +139,14 @@ pub fn run_launcher_daemon() {
         } else {
             // The loading screen going away without the game appearing means the launch died partway.
             if was_loading {
-                debug_log(LogLevel::Warn, LogMode::Nested, "Launcher: loading screen gone without the game, retrying");
+                debug_log(LogLevel::Warn, LogMode::Plain, "Launcher: loading screen gone without the game, retrying");
                 was_loading = false;
                 last_launch = None;
             }
             if last_launch.is_none_or(|t| t.elapsed() >= LAUNCH_RETRY_COOLDOWN) {
                 last_launch = Some(Instant::now());
                 attempts += 1;
-                debug_log(LogLevel::Info, LogMode::Nested, &format!("Launcher: launch attempt {}", attempts));
+                debug_log(LogLevel::Info, LogMode::Plain, &format!("Launcher: launch attempt {}", attempts));
                 let _ = open::that(format!("googleplaygames://launch/?id={}&pid=1", package));
             }
         }

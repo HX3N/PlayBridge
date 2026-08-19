@@ -29,6 +29,7 @@ pub fn send_black_frame_nc(port: u16) {
 
 pub fn screenshot(window: &GameWindow) {
     let Some(pixels) = capture_resized_pixels(window) else {
+        debug_log(LogLevel::Warn, LogMode::Plain, "Screenshot: capture failed");
         display_notification(Notification::ScreenshotFailed);
         return;
     };
@@ -38,6 +39,7 @@ pub fn screenshot(window: &GameWindow) {
     let filepath = format!("{}/Desktop/{}", env::var("USERPROFILE").unwrap(), filename);
     img.write_with_encoder(PngEncoder::new(File::create(&filepath).unwrap())).unwrap();
 
+    debug_log(LogLevel::Info, LogMode::Plain, &format!("Screenshot: saved {}", filepath));
     display_notification(Notification::Screenshot);
 }
 
@@ -74,7 +76,7 @@ pub fn capture_touch_overlay(window: &GameWindow, path: &[(i32, i32)]) {
     let filepath = capture_folder.join(&filename);
     img.write_with_encoder(PngEncoder::new(File::create(&filepath).unwrap())).unwrap();
 
-    debug_log(LogLevel::Info, LogMode::Nested, &format!("TouchOverlay: {}", filepath.display()));
+    debug_log(LogLevel::Info, LogMode::Plain, &format!("TouchOverlay: {}", filepath.display()));
 }
 
 fn capture_resized_pixels(window: &GameWindow) -> Option<Vec<u8>> {
@@ -113,7 +115,7 @@ pub fn transmit_pixels_nc(mut pixels: Vec<u8>, port: u16) {
     let mut stream = match TcpStream::connect((LOOPBACK_IP, port)) {
         Ok(s) => s,
         Err(e) => {
-            debug_log(LogLevel::Error, LogMode::Nested, &format!("Socket: connect failed: {}", e));
+            debug_log(LogLevel::Error, LogMode::Plain, &format!("Socket: connect failed: {}", e));
             return;
         }
     };
@@ -130,7 +132,7 @@ pub fn transmit_pixels_nc(mut pixels: Vec<u8>, port: u16) {
     header[8..12].copy_from_slice(&1u32.to_le_bytes());
 
     if let Err(e) = stream.write_all(&header).and_then(|()| stream.write_all(&pixels)) {
-        debug_log(LogLevel::Error, LogMode::Nested, &format!("Socket: send failed: {}", e));
+        debug_log(LogLevel::Error, LogMode::Plain, &format!("Socket: send failed: {}", e));
         return;
     }
 

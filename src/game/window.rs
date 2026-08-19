@@ -65,9 +65,8 @@ impl GameWindow {
     }
 }
 
-// The frame's move/size loop drains mouse messages from the whole UI thread queue, so the ones
-// posted to the child are swallowed with them. Menu tracking holds the queue the same way, and a
-// press the game still holds capture for feeds the user's moves in past the lock.
+// The frame's move/size loop drains mouse messages from the whole UI thread queue, so the ones posted
+// to the child are swallowed with them — as do menu tracking and a press the game still holds capture for.
 fn in_modal_loop(top: HWND) -> bool {
     // An unreadable state counts as idle: a gate stuck closed would block MAA for good.
     let thread = unsafe { GetWindowThreadProcessId(top, None) };
@@ -88,16 +87,19 @@ pub fn await_modal_end(top: HWND) -> Option<Duration> {
         return Some(Duration::ZERO);
     }
 
+    debug_log(LogLevel::Info, LogMode::Start, "Minitouch: input held for user window action");
+    display_notification(Notification::InputHeld);
+
     let started = Instant::now();
     loop {
         if !unsafe { IsWindow(Some(top)).as_bool() } {
-            debug_log(LogLevel::Warn, LogMode::Event, "Minitouch: window gone while held");
+            debug_log(LogLevel::Warn, LogMode::End, "Minitouch: window gone while held");
             return None;
         }
 
         if !in_modal_loop(top) {
             let held = started.elapsed();
-            debug_log(LogLevel::Info, LogMode::Event, &format!("Minitouch: held for user window action, {} ms", held.as_millis()));
+            debug_log(LogLevel::Info, LogMode::End, &format!("Minitouch: input resumed after {} ms", held.as_millis()));
             return Some(held);
         }
 

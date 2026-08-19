@@ -109,7 +109,7 @@ pub fn spawn_minimize_watcher() {
             )
         };
         if hook.is_invalid() {
-            debug_log(LogLevel::Warn, LogMode::Event, "Park: minimize hook not installed");
+            debug_log(LogLevel::Warn, LogMode::Plain, "Park: minimize hook not installed");
             return;
         }
 
@@ -117,7 +117,7 @@ pub fn spawn_minimize_watcher() {
             SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, None, Some(on_foreground), 0, 0, WINEVENT_OUTOFCONTEXT)
         };
         if foreground_hook.is_invalid() {
-            debug_log(LogLevel::Warn, LogMode::Event, "Park: foreground hook not installed");
+            debug_log(LogLevel::Warn, LogMode::Plain, "Park: foreground hook not installed");
         }
 
         let mut msg = MSG::default();
@@ -173,7 +173,7 @@ impl ParkState {
                     // A minimized window reports an off-screen origin, so surface it to read a real one.
                     unsafe { _ = ShowWindow(top, SW_SHOWNOACTIVATE) };
                     self.pending_park = true;
-                    debug_log(LogLevel::Info, LogMode::Event, "Park: learning home before parking");
+                    debug_log(LogLevel::Info, LogMode::Plain, "Park: learning home before parking");
                 }
             }
             return;
@@ -231,7 +231,7 @@ impl ParkState {
         let target_y = park_y();
         let moved = move_window(top, x, target_y);
         if !moved {
-            debug_log(LogLevel::Warn, LogMode::Event, "Park: move off-screen failed");
+            debug_log(LogLevel::Warn, LogMode::Plain, "Park: move off-screen failed");
             return;
         }
 
@@ -245,7 +245,7 @@ impl ParkState {
         self.parked = true;
         store_origin(PARK_HOME_KEY, x, y);
         display_notification(Notification::WindowParked);
-        debug_log(LogLevel::Info, LogMode::Event, &format!("Park: minimized, parked at ({},{}) home ({},{})", x, target_y, x, y));
+        debug_log(LogLevel::Info, LogMode::Start, &format!("Park: minimized, parked at ({},{}) home ({},{})", x, target_y, x, y));
     }
 
     fn unpark(&mut self, top: HWND) {
@@ -257,7 +257,7 @@ impl ParkState {
         self.parked = false;
         PARK_RETURN.store(PARK_RETURN_NONE, Ordering::Relaxed);
         clear_origin(PARK_HOME_KEY);
-        debug_log(LogLevel::Info, LogMode::Event, &format!("Park: foreground, restored to ({},{})", x, y));
+        debug_log(LogLevel::Info, LogMode::End, &format!("Park: foreground, restored to ({},{})", x, y));
     }
 
     // Disarms the hooks first, or the exit's own minimize re-parks the window it is restoring.
@@ -276,13 +276,13 @@ impl ParkState {
         }
         self.parked = false;
         clear_origin(PARK_HOME_KEY);
-        debug_log(LogLevel::Info, LogMode::Event, &format!("Park: daemon exit, restored to ({},{}) and re-minimized", x, y));
+        debug_log(LogLevel::Info, LogMode::End, &format!("Park: daemon exit, restored to ({},{}) and re-minimized", x, y));
     }
 
     // With no window left to move back, a surviving record would only strand the next daemon.
     pub fn discard(&self) {
         if self.parked {
-            debug_log(LogLevel::Warn, LogMode::Event, "Park: window gone, state discarded");
+            debug_log(LogLevel::Warn, LogMode::End, "Park: window gone, state discarded");
         }
         clear_origin(PARK_HOME_KEY);
     }
@@ -321,20 +321,20 @@ pub fn adopt_stale_park() {
     };
 
     let Some(win) = GameWindow::find() else {
-        debug_log(LogLevel::Warn, LogMode::Event, "Park: stale record found but window is gone");
+        debug_log(LogLevel::Warn, LogMode::Plain, "Park: stale record found but window is gone");
         return;
     };
 
     let top = unsafe { GetAncestor(win.hwnd, GA_ROOT) };
     if !off_all_monitors(top) {
         clear_origin(PARK_HOME_KEY);
-        debug_log(LogLevel::Warn, LogMode::Event, "Park: stale record dropped, window is already on screen");
+        debug_log(LogLevel::Warn, LogMode::Plain, "Park: stale record dropped, window is already on screen");
         return;
     }
 
     move_window(top, x, y);
     clear_origin(PARK_HOME_KEY);
-    debug_log(LogLevel::Warn, LogMode::Event, &format!("Park: adopted stale record, restored to ({},{})", x, y));
+    debug_log(LogLevel::Warn, LogMode::Plain, &format!("Park: adopted stale record, restored to ({},{})", x, y));
 }
 
 // A window still holding its queue's active window while the foreground sits elsewhere never receives
@@ -398,7 +398,7 @@ impl ActivationWatch {
     pub fn update(&mut self, top: HWND) {
         if !activation_is_stale(top) {
             if self.repairs > 0 {
-                debug_log(LogLevel::Info, LogMode::Event, "Activation: cleared");
+                debug_log(LogLevel::Info, LogMode::End, "Activation: cleared");
             }
             self.stale_since = None;
             self.repairs = 0;
@@ -419,13 +419,22 @@ impl ActivationWatch {
         // Restarted so the next attempt waits out the delay again instead of firing on the following tick.
         self.stale_since = Some(Instant::now());
         self.repairs += 1;
+        let mode = if self.repairs == 1 { LogMode::Start } else { LogMode::Plain };
         debug_log(
             LogLevel::Warn,
-            LogMode::Event,
+            mode,
             &format!(
                 "Activation: stale active window, queue deactivation ({}/{}, moved {})",
                 self.repairs, ACTIVATION_REPAIR_ATTEMPTS, moved
             ),
         );
+    }
+
+    pub fn discard(&mut self) {
+        if self.repairs > 0 {
+            debug_log(LogLevel::Warn, LogMode::End, "Activation: discarded");
+        }
+        self.stale_since = None;
+        self.repairs = 0;
     }
 }

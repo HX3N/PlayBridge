@@ -25,10 +25,10 @@ every nemu export must be panic-free and turn errors into non-zero return codes.
 
 | Path                          | Runs in                        | Holds                                                                     |
 | ----------------------------- | ------------------------------ | ------------------------------------------------------------------------- |
-| `src/main.rs`                 | every bin invocation           | DPI/logging setup, argv parsing, dispatch to a daemon or the shim         |
+| `src/main.rs`                 | every bin invocation           | DPI setup, log rotation and depth reset, argv parsing, dispatch to a daemon or the shim |
 | `src/shim.rs`                 | the one-shot fake-adb call     | `Command`, `parse_command`, `execute_command`                             |
 | `src/daemon/`                 | the long-lived processes       | `wgc`, `minitouch`, `launcher`, and the `window_state` the WGC daemon owns |
-| `src/game/`                   | anything touching GPG's window | `window` (finding it, and the input gate), `input`, `capture`             |
+| `src/game/`                   | anything touching GPG's window | `window` (finding it, and the gate that yields to the user), `input` (`PostMessage` plus the lock primitives), `capture` |
 | `src/sys/`                    | anything                       | registry config, logging, toasts, MAA lookup, GPG store, named mutexes    |
 | `src/lib.rs`, `src/shared.rs` | the cdylib (and the bin)       | nemu exports; the constants both crates must agree on                     |
 
@@ -68,7 +68,7 @@ MAA (MaaAssistantArknights)
 Both screencap paths converge on the **single** WGC daemon: PlayExtras gets the frame returned over the same
 socket (byte-return verb), RawByNc has the daemon connect out to MAA's `nc` port. Input never goes through the
 DLL — the nemu input exports are stubs; real input is Win32 `PostMessage` to the CROSVM child, from the bin or
-the minitouch daemon.
+the minitouch daemon, which holds the window against the user for the length of each touch (see _Input lock_).
 
 The daemon also owns the GPG window's state, not just its pixels: it normalizes the window every maintenance
 tick, intercepts minimize so capture never stops (see _Window parking_), and clears an activation the window
@@ -174,6 +174,57 @@ own chrome. And the pass leans on `window_list()` yielding only visible, titled 
 top-levels of the same class, each with a `CROSVM_1` child of its own, but all four are invisible 12x12 stubs
 with empty titles and never reach the filter.
 
+## Input lock (minitouch)
+
+Implemented in `src/daemon/minitouch.rs`, on two primitives in `src/game/input.rs`.
+
+MAA's touches are `PostMessage`d to the CROSVM child, which is the same queue the user's real mouse feeds. A
+stray click landing between a swipe's DOWN and UP tears the gesture in half. So for as long as a touch is in
+flight the daemon takes the window away from the user: the first touch disables the **top-level** window
+(`set_input_enabled` → `EnableWindow`). Disabling is inherited by the child the game draws into, so one call
+covers the tree, and posted messages are unaffected — they never go through the disabled check, which is what
+makes the lock one-sided.
+
+`EnableWindow` alone is not enough. It only turns away input the system routes by **hit-testing**, and a press
+hands the game mouse capture, which skips that routing — a user already holding the button when the lock goes
+up keeps feeding moves straight through it. Capture belongs to the holder thread's input state and cannot be
+released from outside without sharing that state for the call, so `release_game_capture` attaches to GPG's UI
+thread (`AttachThreadInput`), calls `ReleaseCapture`, and detaches.
+
+The read loop blocks on MAA's stdin pipe, so neither the grace period nor the capture chase can be timed
+there; a watchdog thread (`spawn_lock_watchdog`) owns both:
+
+| Constant       | Value  | Paces                                                                        |
+| -------------- | ------ | ----------------------------------------------------------------------------- |
+| `LOCK_POLL`    | 50 ms  | idle cadence — how often the watchdog asks whether the lock has gone stale    |
+| `CAPTURE_POLL` | 2 ms   | cadence while chasing a capture that has not appeared yet                     |
+| `CAPTURE_WAIT` | 150 ms | how long that chase runs before it gives up                                   |
+| `LOCK_GRACE`   | 300 ms | idle time after the last touch command before the lock is released            |
+
+The press is *posted*, so the game takes capture some time after the daemon has already moved on and there is
+nothing to release at that instant. Instead of sleeping on it, `await_capture_release` arms a deadline and the
+watchdog chases at `CAPTURE_POLL` until either the release succeeds or `CAPTURE_WAIT` expires.
+
+Release is driven by idle, not by UP. Consecutive swipes sit ~260 ms apart, so a touch ending only restarts
+the grace period and the lock survives the gap between them. A long press is the opposite case — it sends no
+commands for its whole duration — so a touch still down is marked `held`, which stops the idle clock from
+running at all.
+
+A daemon killed mid-swipe leaves the window disabled with nobody left to re-enable it, so `refresh_window`
+re-enables unconditionally on every fresh bind; the next daemon clears the wreckage before its first touch. A
+window that vanishes while the lock is up is logged as a dropped lock rather than an unlock, because there is
+nothing left to restore.
+
+The gate runs in the other direction too. `await_modal_end` (`src/game/window.rs`) keeps MAA off a window the
+user is already busy with, and is consulted **before a new press only** — mid-swipe the daemon already owns
+the window. It blocks while `in_modal_loop` reports GPG's UI thread inside a move/size loop, inside menu
+tracking, or holding capture. The first two drain mouse messages from the whole thread queue, so the ones
+posted to the child are swallowed with them; the capture check is what catches a press the user has not let go
+of, whose moves would otherwise ride in past the lock. Polling is `HOLD_POLL` (5 ms) and an `InputHeld` toast
+is asked for on **every** pass by design — the tag's registry cooldown (see _Shared state_) is what spaces the
+toasts out, so the wait needs no delay constant of its own. An unreadable thread state counts as idle: a gate
+stuck closed would block MAA for good.
+
 ## Client selection and launch
 
 `adb devices` is where the client (EN/KR/JP) is first **proposed**, not where it is settled. Only that process
@@ -240,6 +291,7 @@ The bin and the DLL are separate processes; all persistent state lives under `HK
 | `…\state`            | `MAA_PID`            | `devices` handler       | WGC daemon               | the MAA that spawned the daemons; its exit ends them       |
 | `…\state`            | `WINDOW_HOME`        | daemon (`ParkState`)    | daemon                   | `x,y` the window belongs at, survives daemon restarts      |
 | `…\state`            | `PARK_HOME`          | daemon (`ParkState`)    | daemon                   | set only while parked; found at startup = died parked      |
+| `…\state`            | `LOG_DEPTH`          | every process (`debug_log`) | every process        | open log blocks; carries indentation across processes (see _Logging_) |
 | `…\config`           | `CLIENT`, `VERSION`  | bin                     | bin                      | client (EN/KR/JP) + last-seen version                      |
 | `…\config`           | `TOUCH_OVERLAY`      | bin (`--touch-overlay`) | bin                      | touch-path overlay capture toggle                          |
 | `…\config`           | `LAST_UPDATE_CHECK`  | bin                     | bin                      | GitHub release check throttle (24 h)                       |
@@ -327,3 +379,47 @@ elsewhere" as the signature. A genuine deactivation passes through that state fo
 outlives `ACTIVATION_REPAIR_DELAY` (500 ms) is repaired, at most three times. The repair attaches the daemon's
 thread to GPG's input queue (`AttachThreadInput`) and calls `SetActiveWindow` on a hidden helper window, so the
 kernel delivers the missed deactivation. The foreground is never touched, so nothing moves on screen.
+
+## Logging
+
+One file, `<exe dir>\debug\PlayBridge.log`, rotated to `PlayBridge.bak.log` once it passes 1 MB
+(`MAX_LOG_FILE_SIZE`, checked once per process start). Four kinds of process append into it: the one-shot
+shim, the WGC daemon, the launcher daemon, and the minitouch daemon. Nothing coordinates their writes beyond
+the append, so a read of the file is a merged timeline of all of them.
+
+`LogMode` has three shapes, and the depth prefix is what tells them apart:
+
+| Mode    | Line                          | Used for                                  |
+| ------- | ----------------------------- | ----------------------------------------- |
+| `Start` | `[…][INF]││┌ message`         | opens a block                             |
+| `End`   | `[…][INF]││└ message`         | closes it                                 |
+| `Plain` | `[…][INF]││ message`          | everything else, drawn inside the current block |
+
+The depth is not a process-local counter. It lives in the registry (`LOG_DEPTH` under `…\state`, see _Shared
+state_) precisely so a block one process opens indents what **other** processes write while it is open — the
+WGC and minitouch daemons hold a block for their whole lifetime, so every shim invocation, park, activation
+repair, and input lock that happens meanwhile is drawn inside them. A per-process counter would flatten all of
+that back into one column.
+
+Both lines of a block are drawn at the **outer** depth, which is why `End` shifts the depth before writing its
+line and `Start` shifts it after.
+
+Because several processes update the same value, `shift_log_depth` and `reset_log_depth` wrap the
+read-modify-write in a named mutex (`Local\PlayBridgeLogDepth`, 200 ms wait) via `acquire_lock`
+(`src/sys/process.rs`). An abandoned mutex counts as acquired there: a holder that died mid-update would
+otherwise lock the name for good and silence the depth for every process after it.
+
+The stored depth outlives a process killed with a block still open — and the reboot after it. Recovering from
+that is the one thing a shared counter cannot infer locally, so `main()` resets it only when neither
+`DAEMON_MUTEX` nor `LAUNCHER_MUTEX` exists (`mutex_exists`, which checks without claiming). No daemon left
+means no block is open anywhere, and that is the only moment a stranded depth can be told apart from a real
+one.
+
+Blocks are opened by: the bin invocation itself (argv in, elapsed ms out — closed *before* dispatching to a
+daemon, since the daemon outlives the call), each daemon's lifetime, a park and its restore (_Window
+parking_), an activation repair and its outcome (_Stale activation_), an input lock and its release (_Input
+lock_), and a wait on the user's window action.
+
+Paths that used to only raise a toast now leave a line as well, so the log explains a notification instead of
+merely coinciding with it: panics (via the hook, before the toast), ADB `input tap`/`swipe` being refused,
+an unsupported or contradicting MAA client, an unknown command, and a failed screenshot.

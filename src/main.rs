@@ -9,6 +9,7 @@ mod sys;
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 
 use crate::sys::logging::{debug_log, LogLevel, LogMode};
+use crate::sys::process::mutex_exists;
 
 fn main() {
     unsafe { _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
@@ -16,6 +17,13 @@ fn main() {
     let start = Instant::now();
 
     sys::logging::register_panic_hook();
+
+    // No daemon left means no block is open anywhere,
+    // which is the only moment a stranded depth can be told apart from a real one.
+    if !mutex_exists(daemon::wgc::DAEMON_MUTEX) && !mutex_exists(daemon::launcher::LAUNCHER_MUTEX) {
+        sys::logging::reset_log_depth();
+    }
+
     sys::logging::rotate_log();
 
     // We spawn our own daemons by full path while MAA calls us by name, so argv[0] alone would
@@ -36,18 +44,24 @@ fn main() {
         let _ = sys::config::set_registry(shared::KEY_EXE_PATH, exe.to_string_lossy().as_ref(), sys::config::REG_PATH_STATE);
     }
 
+    // The daemon outlives this call, so the call block closes before it runs instead of after.
+    let close_call = || debug_log(LogLevel::Info, LogMode::End, &format!("{} ms", start.elapsed().as_millis()));
+
     if args.iter().any(|a| a == "--wgc-daemon") {
+        close_call();
         daemon::wgc::run_daemon();
         return;
     }
 
     if args.iter().any(|a| a == daemon::launcher::LAUNCHER_ARG) {
+        close_call();
         daemon::launcher::run_launcher_daemon();
         return;
     }
 
     // shell /data/local/tmp/<uuid> -i
     if args.iter().any(|a| a == "-i") {
+        close_call();
         daemon::minitouch::run_minitouch_daemon();
         return;
     }
@@ -60,5 +74,5 @@ fn main() {
         sys::logging::log_silent_reply();
     }
 
-    debug_log(LogLevel::Info, LogMode::End, &format!("{} ms", start.elapsed().as_millis()));
+    close_call();
 }

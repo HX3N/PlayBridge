@@ -176,7 +176,7 @@ pub fn display_notification(notification: Notification) {
         }
     }
 
-    debug_log(level, LogMode::Nested, &format!("Notification: {}", body));
+    debug_log(level, LogMode::Plain, &format!("Notification: {}", body));
 
     let icon_path = env::temp_dir().join("playbridge.png");
 

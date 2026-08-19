@@ -119,7 +119,7 @@ pub fn set_client(client: Client) {
 
     debug_log(
         LogLevel::Info,
-        LogMode::Nested,
+        LogMode::Plain,
         &format!("Client: set {} (title: {}, package: {})", client.as_str(), client.title(), client.package()),
     );
     set_registry("CLIENT", client.as_str(), REG_PATH_CONFIG).unwrap();
@@ -137,12 +137,12 @@ pub fn check_version() {
     reply(&format!("PlayBridge {}", current_version));
 
     if stored_version == current_version {
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Version: {}", current_version));
+        debug_log(LogLevel::Info, LogMode::Plain, &format!("Version: {}", current_version));
         return;
     }
 
     let previous = if stored_version.is_empty() { "(none)" } else { stored_version.as_str() };
-    debug_log(LogLevel::Info, LogMode::Nested, &format!("Version: updated {} -> {}", previous, current_version));
+    debug_log(LogLevel::Info, LogMode::Plain, &format!("Version: updated {} -> {}", previous, current_version));
     set_registry("VERSION", current_version, REG_PATH_CONFIG).unwrap();
     Config::reload();
 }
@@ -157,7 +157,7 @@ pub fn check_for_update() {
 
     if is_dev || is_cooldown {
         let reason = if is_dev { "development" } else { "cooldown" };
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Update: skip check ({})", reason));
+        debug_log(LogLevel::Info, LogMode::Plain, &format!("Update: skip check ({})", reason));
         return;
     }
 
@@ -170,16 +170,16 @@ pub fn check_for_update() {
     {
         Ok(j) => j,
         Err(e) => {
-            debug_log(LogLevel::Warn, LogMode::Nested, &format!("Update: check failed: {}", e));
+            debug_log(LogLevel::Warn, LogMode::Plain, &format!("Update: check failed: {}", e));
             return;
         }
     };
 
     let latest = json["tag_name"].as_str().unwrap_or("");
     if latest == current {
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Update: up to date ({})", current));
+        debug_log(LogLevel::Info, LogMode::Plain, &format!("Update: up to date ({})", current));
     } else {
-        debug_log(LogLevel::Info, LogMode::Nested, &format!("Update: available {} -> {}", current, latest));
+        debug_log(LogLevel::Info, LogMode::Plain, &format!("Update: available {} -> {}", current, latest));
         display_notification(Notification::UpdateAvailable(latest.to_string()));
     }
 }

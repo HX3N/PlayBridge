@@ -17,7 +17,7 @@ use crate::game::window::{await_modal_end, describe_window, parent_or_self, Game
 use crate::sys::config::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use crate::sys::logging::{debug_log, LogLevel, LogMode};
 
-const LOCK_GRACE: Duration = Duration::from_millis(500);
+const LOCK_GRACE: Duration = Duration::from_millis(300);
 const LOCK_POLL: Duration = Duration::from_millis(50);
 const CAPTURE_POLL: Duration = Duration::from_millis(2);
 const CAPTURE_WAIT: Duration = Duration::from_millis(150);
@@ -27,6 +27,7 @@ struct InputLock {
     top: isize,
     held: bool,
     last_activity: Instant,
+    locked_at: Instant,
     capture_deadline: Option<Instant>,
 }
 
@@ -39,7 +40,8 @@ fn mark_touch(lock: &Mutex<InputLock>, top: HWND, held: bool) {
     if state.top == 0 {
         set_input_enabled(top, false);
         state.top = top.0 as isize;
-        debug_log(LogLevel::Info, LogMode::Event, "Minitouch: input locked");
+        state.locked_at = Instant::now();
+        debug_log(LogLevel::Info, LogMode::Start, "Minitouch: input locked");
     }
 }
 
@@ -68,9 +70,12 @@ fn release_lock(lock: &Mutex<InputLock>, restore: bool) {
     if state.top == 0 {
         return;
     }
+    let held = state.locked_at.elapsed().as_millis();
     if restore {
         set_input_enabled(HWND(state.top as *mut c_void), true);
-        debug_log(LogLevel::Info, LogMode::Event, "Minitouch: input unlocked");
+        debug_log(LogLevel::Info, LogMode::End, &format!("Minitouch: input unlocked, held {} ms", held));
+    } else {
+        debug_log(LogLevel::Warn, LogMode::End, &format!("Minitouch: input lock dropped, held {} ms", held));
     }
     state.top = 0;
     state.capture_deadline = None;
@@ -104,10 +109,11 @@ fn spawn_lock_watchdog(lock: Arc<Mutex<InputLock>>) {
         // A long press sends no commands for its whole duration, so a held touch gets no deadline.
         if !state.held && state.last_activity.elapsed() >= LOCK_GRACE {
             let idle = state.last_activity.elapsed().as_millis();
+            let held = state.locked_at.elapsed().as_millis();
             set_input_enabled(top, true);
             state.top = 0;
             state.capture_deadline = None;
-            debug_log(LogLevel::Info, LogMode::Event, &format!("Minitouch: input unlocked after {} ms idle", idle));
+            debug_log(LogLevel::Info, LogMode::End, &format!("Minitouch: input unlocked after {} ms idle, held {} ms", idle, held));
         }
     });
 }
@@ -126,12 +132,12 @@ fn refresh_window(window: Option<GameWindow>, w_width: &mut i32, w_height: &mut 
     *w_height = h;
     // A daemon that died mid-swipe leaves the window refusing input, so a fresh bind clears it.
     set_input_enabled(parent_or_self(new_win.hwnd), true);
-    debug_log(LogLevel::Info, LogMode::Event, &format!("Minitouch: bound {}", describe_window(new_win.hwnd, None)));
+    debug_log(LogLevel::Info, LogMode::Plain, &format!("Minitouch: bound {}", describe_window(new_win.hwnd, None)));
     Some(new_win)
 }
 
 pub fn run_minitouch_daemon() {
-    debug_log(LogLevel::Info, LogMode::End, "Minitouch: started / awaiting handshake");
+    debug_log(LogLevel::Info, LogMode::Start, "Minitouch: started / awaiting handshake");
 
     println!("v 1");
     println!("^ 10 {} {} 100", DISPLAY_WIDTH, DISPLAY_HEIGHT);
@@ -146,14 +152,20 @@ pub fn run_minitouch_daemon() {
     let mut touch_path: Vec<(i32, i32)> = Vec::new();
     let mut touch_started = Instant::now();
 
-    let lock = Arc::new(Mutex::new(InputLock { top: 0, held: false, last_activity: Instant::now(), capture_deadline: None }));
+    let lock = Arc::new(Mutex::new(InputLock {
+        top: 0,
+        held: false,
+        last_activity: Instant::now(),
+        locked_at: Instant::now(),
+        capture_deadline: None,
+    }));
     spawn_lock_watchdog(Arc::clone(&lock));
 
     // The handshake above already told MAA this succeeded, so exiting now would close the pipe it just opened.
     let (mut w_width, mut w_height) = (0, 0);
     let mut window = refresh_window(None, &mut w_width, &mut w_height);
     if window.is_none() {
-        debug_log(LogLevel::Warn, LogMode::Event, "Minitouch: window not found, waiting");
+        debug_log(LogLevel::Warn, LogMode::Plain, "Minitouch: window not found, waiting");
     }
 
     while let Some(Ok(line)) = iterator.next() {
@@ -202,6 +214,9 @@ pub fn run_minitouch_daemon() {
                 window = refresh_window(window, &mut w_width, &mut w_height);
 
                 let Some(top) = window.as_ref().map(|w| parent_or_self(w.hwnd)) else {
+                    if is_down {
+                        debug_log(LogLevel::Warn, LogMode::Plain, "Minitouch: touch dropped, window gone");
+                    }
                     is_down = false;
                     release_lock(&lock, false);
                     touch_path.clear();
@@ -222,6 +237,9 @@ pub fn run_minitouch_daemon() {
 
                 let Some(win) = window.as_ref() else {
                     // Nothing to press against, so the press is forgotten and a rebind starts from a fresh DOWN.
+                    if is_down {
+                        debug_log(LogLevel::Warn, LogMode::Plain, "Minitouch: touch dropped, window unbound");
+                    }
                     is_down = false;
                     touch_path.clear();
                     continue;
@@ -230,8 +248,8 @@ pub fn run_minitouch_daemon() {
                 if let Some((x, y)) = current_pos {
                     let pos = get_relative_point(x, y, w_width, w_height);
                     if !is_down {
-                        debug_log(LogLevel::Info, LogMode::Start, &format!("Minitouch: DOWN at x={}, y={}", x, y));
                         mark_touch(&lock, top, true);
+                        debug_log(LogLevel::Info, LogMode::Plain, &format!("Minitouch: DOWN at x={}, y={}", x, y));
                         post_message(win.hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos));
                         post_message(win.hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos));
                         await_capture_release(&lock);
@@ -255,12 +273,12 @@ pub fn run_minitouch_daemon() {
                     let moves = touch_path.len().saturating_sub(1);
                     let elapsed = touch_started.elapsed().as_millis();
                     if moves == 0 {
-                        debug_log(LogLevel::Info, LogMode::End, &format!("Minitouch: TAP, {} ms", elapsed));
+                        debug_log(LogLevel::Info, LogMode::Plain, &format!("Minitouch: TAP, {} ms", elapsed));
                     } else {
                         let (ex, ey) = touch_path.last().copied().unwrap_or_default();
                         debug_log(
                             LogLevel::Info,
-                            LogMode::End,
+                            LogMode::Plain,
                             &format!("Minitouch: SWIPE to ({},{}), {} moves, {} ms", ex, ey, moves, elapsed),
                         );
                     }
@@ -303,5 +321,5 @@ pub fn run_minitouch_daemon() {
     release_lock(&lock, true);
 
     // The loop only ends when the pipe closes, which is MAA letting go.
-    debug_log(LogLevel::Info, LogMode::Event, "Minitouch: MAA gone, stopped");
+    debug_log(LogLevel::Info, LogMode::End, "Minitouch: MAA gone, stopped");
 }

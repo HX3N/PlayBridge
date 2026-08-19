@@ -98,17 +98,18 @@ fn apply_maa_client() -> bool {
     }
 
     let Some(client_type) = maa::client_type() else {
-        debug_log(LogLevel::Warn, LogMode::Nested, "Client: MAA config unreadable, falling back to window title");
+        debug_log(LogLevel::Warn, LogMode::Plain, "Client: MAA config unreadable, falling back to window title");
         return true;
     };
 
     let Some(client) = Client::from_maa_client_type(&client_type) else {
+        debug_log(LogLevel::Warn, LogMode::Plain, &format!("Client: unsupported MAA client type {}", client_type));
         display_notification(Notification::UnsupportedClient(client_type));
         return false;
     };
 
     // set_client is silent when nothing changes, which would leave no trace that MAA was read at all.
-    debug_log(LogLevel::Info, LogMode::Nested, &format!("Client: {} from MAA config", client.as_str()));
+    debug_log(LogLevel::Info, LogMode::Plain, &format!("Client: {} from MAA config", client.as_str()));
     set_client(client);
     true
 }
@@ -121,6 +122,7 @@ pub fn execute_command(command: Command) {
             if let Some(w) = window {
                 capture::screenshot(&w);
             } else {
+                debug_log(LogLevel::Warn, LogMode::Plain, "Screenshot: window not found");
                 display_notification(Notification::ScreenshotFailed);
             }
             check_for_update();
@@ -143,8 +145,9 @@ pub fn execute_command(command: Command) {
             if let Some(w) = window {
                 input::terminate(&w);
             } else {
-                debug_log(LogLevel::Warn, LogMode::Nested, "ForceStop: window not found");
+                debug_log(LogLevel::Warn, LogMode::Plain, "ForceStop: window not found");
             }
+            debug_log(LogLevel::Info, LogMode::Plain, "ForceStop: shutdown requested");
             display_notification(Notification::GpgShutdown);
         }
         Command::ToggleTouchOverlay => {
@@ -180,11 +183,11 @@ pub fn execute_command(command: Command) {
 
         Command::ScreencapNc { port } => {
             if wgc::deliver_via_daemon(port) {
-                debug_log(LogLevel::Info, LogMode::Nested, "RawByNc: delivered via WGC daemon");
+                debug_log(LogLevel::Info, LogMode::Plain, "RawByNc: delivered via WGC daemon");
             } else {
                 // Daemon not warm yet: spawn it and send a black frame this once; the next request hits the warm daemon.
                 wgc::ensure_daemon();
-                debug_log(LogLevel::Info, LogMode::Nested, "RawByNc: daemon cold, spawned + sent black frame");
+                debug_log(LogLevel::Info, LogMode::Plain, "RawByNc: daemon cold, spawned + sent black frame");
                 capture::send_black_frame_nc(port);
             }
         }
@@ -199,23 +202,25 @@ pub fn execute_command(command: Command) {
             if let Some(w) = window {
                 input::input_keyevent(&w, keycode);
             } else {
-                debug_log(LogLevel::Warn, LogMode::Nested, "KeyEvent: window not found");
+                debug_log(LogLevel::Warn, LogMode::Plain, "KeyEvent: window not found");
             }
         }
         Command::Text { text } => {
             if let Some(w) = window {
                 input::input_text(&w, &text);
             } else {
-                debug_log(LogLevel::Warn, LogMode::Nested, "Text: window not found");
+                debug_log(LogLevel::Warn, LogMode::Plain, "Text: window not found");
             }
         }
 
         Command::AdbInputUnsupported => {
+            debug_log(LogLevel::Warn, LogMode::Plain, "Input: ADB input requested");
             display_notification(Notification::AdbInputUnsupported);
         }
 
         Command::Ignore => {}
         Command::Unknown(cmd) => {
+            debug_log(LogLevel::Warn, LogMode::Plain, &format!("Command: unknown, {}", cmd));
             display_notification(Notification::UnknownCommand(cmd));
         }
     }

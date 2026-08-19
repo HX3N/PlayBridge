@@ -20,8 +20,6 @@ pub fn post_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) {
     unsafe { _ = PostMessageW(Some(hwnd), msg, wparam, lparam) };
 }
 
-// Disabling is inherited by the child the game draws into, but it only turns away input the system
-// routes by hit-testing, and a press hands the game mouse capture, which skips that routing.
 pub fn set_input_enabled(top: HWND, enabled: bool) {
     unsafe { _ = EnableWindow(top, enabled) };
 }

@@ -47,7 +47,7 @@ use crate::sys::logging::{debug_log, LogLevel, LogMode};
 use crate::sys::notification::{display_notification, Notification};
 use crate::sys::process::already_running;
 
-const DAEMON_MUTEX: &str = "Local\\PlayBridgeWgcDaemon";
+pub const DAEMON_MUTEX: &str = "Local\\PlayBridgeWgcDaemon";
 // MAA's lifetime ends the daemon; idling only drops capture to low power.
 const LOW_POWER_AFTER: Duration = Duration::from_secs(15);
 // Stays under FRAME_STALE so the first request after idling still gets a frame that counts as fresh.
@@ -89,11 +89,17 @@ fn check_render_resolution() {
 
     let height_ratio = h as f32 / (w as f32 / 16.0);
     if (height_ratio - 9.0).abs() > 0.1 {
+        debug_log(LogLevel::Warn, LogMode::Plain, &format!("Window: height ratio {:.1}, expected 9", height_ratio));
         display_notification(Notification::WindowWrongRatio(height_ratio));
         return;
     }
 
     if (w, h) != (DISPLAY_WIDTH, DISPLAY_HEIGHT) {
+        debug_log(
+            LogLevel::Warn,
+            LogMode::Plain,
+            &format!("Window: internal resolution {}x{}, expected {}x{}", w, h, DISPLAY_WIDTH, DISPLAY_HEIGHT),
+        );
         display_notification(Notification::InternalResolution { w, h });
     }
 }
@@ -495,8 +501,6 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     // Response: [w: u32 LE][h: u32 LE][rgba...]; no fresh frame degrades to a black frame in the same format.
     let extras = maa_port == 0;
     let (verb, cost) = if extras { ("extras", "ipc_write") } else { ("rawbync", "transmit") };
-    // A rawbync line belongs to the command process that asked for it; the daemon's own delivery stands alone.
-    let mode = if extras { LogMode::Plain } else { LogMode::Nested };
 
     let (rgba, timings) = match frame {
         Some((rgba, frame_age, crop_resize)) => (rgba, Some((frame_age, crop_resize))),
@@ -513,7 +517,7 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     match timings {
         Some((frame_age, crop_resize)) => debug_log(
             if reused { LogLevel::Warn } else { LogLevel::Info },
-            mode,
+            LogMode::Plain,
             &format!(
                 "Wgc: {} {} in {} ms (age {} ms, crop+resize {} ms, {} {} ms)",
                 verb,
@@ -526,7 +530,7 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
             ),
         ),
         None => {
-            debug_log(LogLevel::Warn, mode, &format!("Wgc: {} no fresh frame, sent black frame", verb));
+            debug_log(LogLevel::Warn, LogMode::Plain, &format!("Wgc: {} no fresh frame, sent black frame", verb));
             // MAA asked for the screen and there is none, which is the one moment worth starting the game.
             ensure_launcher();
         }
@@ -554,9 +558,10 @@ fn maintain(
 
     match w {
         None => {
+            activation.discard();
             // Starting the game belongs to the launcher, so this only waits for the window to return.
             if cap.is_some() {
-                debug_log(LogLevel::Warn, LogMode::Event, "Wgc: window gone, waiting");
+                debug_log(LogLevel::Warn, LogMode::Plain, "Wgc: window gone, waiting");
                 *cap = None;
             }
         }
@@ -579,7 +584,7 @@ fn maintain(
 /// Single instance; serves the latest frame to thin clients and lives as long as the MAA that spawned it.
 pub fn run_daemon() {
     if already_running(DAEMON_MUTEX) {
-        debug_log(LogLevel::Info, LogMode::End, "Wgc: already running");
+        debug_log(LogLevel::Info, LogMode::Plain, "Wgc: already running");
         return;
     }
 
@@ -590,16 +595,19 @@ pub fn run_daemon() {
     let listener = match TcpListener::bind(("127.0.0.1", 0)) {
         Ok(l) => l,
         Err(e) => {
-            debug_log(LogLevel::Error, LogMode::End, &format!("Wgc: bind failed: {}", e));
+            debug_log(LogLevel::Error, LogMode::Plain, &format!("Wgc: bind failed: {}", e));
             return;
         }
     };
     let port = match listener.local_addr() {
         Ok(a) => a.port(),
-        Err(_) => return,
+        Err(_) => {
+            debug_log(LogLevel::Error, LogMode::Plain, "Wgc: local addr unknown");
+            return;
+        }
     };
     let _ = set_registry(KEY_DAEMON_PORT, port as u32, REG_PATH_STATE);
-    debug_log(LogLevel::Info, LogMode::End, &format!("Wgc: started / awaiting handshake (127.0.0.1:{})", port));
+    debug_log(LogLevel::Info, LogMode::Start, &format!("Wgc: started / awaiting handshake (127.0.0.1:{})", port));
 
     adopt_stale_park();
     spawn_minimize_watcher();
@@ -634,7 +642,7 @@ pub fn run_daemon() {
         if let Ok(AssertSend(built)) = build_rx.try_recv() {
             building = false;
             if let Some(c) = built {
-                debug_log(LogLevel::Info, LogMode::Event, &format!("Wgc: bound {}", describe_window(c.child(), Some(c.top))));
+                debug_log(LogLevel::Info, LogMode::Plain, &format!("Wgc: bound {}", describe_window(c.child(), Some(c.top))));
                 check_render_resolution();
                 cap = Some(c);
             }
@@ -643,14 +651,14 @@ pub fn run_daemon() {
         match rx.recv_timeout(MAINTENANCE_INTERVAL) {
             Ok(stream) => {
                 if LOW_POWER.swap(false, Ordering::Relaxed) {
-                    debug_log(LogLevel::Info, LogMode::Event, "Wgc: request in, back to full rate");
+                    debug_log(LogLevel::Info, LogMode::Plain, "Wgc: request in, back to full rate");
                 }
                 handle_client(stream, cap.as_ref());
                 last_active = Instant::now();
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if last_active.elapsed() > LOW_POWER_AFTER && !LOW_POWER.swap(true, Ordering::Relaxed) {
-                    debug_log(LogLevel::Info, LogMode::Event, "Wgc: idle, dropping to low power");
+                    debug_log(LogLevel::Info, LogMode::Plain, "Wgc: idle, dropping to low power");
                 }
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -679,9 +687,11 @@ pub fn run_daemon() {
         None => park.discard(),
     }
 
+    activation.discard();
+
     let _ = set_registry(KEY_DAEMON_PORT, 0u32, REG_PATH_STATE);
     let farewell = if maa_gone { "Wgc: MAA gone, stopped" } else { "Wgc: stopped" };
-    debug_log(LogLevel::Info, LogMode::Event, farewell);
+    debug_log(LogLevel::Info, LogMode::End, farewell);
 }
 
 pub fn ensure_daemon() {
