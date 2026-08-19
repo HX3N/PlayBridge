@@ -23,7 +23,6 @@ const CROSVM_CLASS: &str = "CROSVM_1";
 const WINDOW_RESTORE_DELAY_MS: u64 = 300;
 
 const HOLD_POLL: Duration = Duration::from_millis(5);
-const HOLD_WARN_DELAY: Duration = Duration::from_secs(3);
 
 const MODAL_FLAGS: u32 = GUI_INMOVESIZE.0 | GUI_INMENUMODE.0 | GUI_SYSTEMMENUMODE.0 | GUI_POPUPMENUMODE.0;
 
@@ -67,7 +66,8 @@ impl GameWindow {
 }
 
 // The frame's move/size loop drains mouse messages from the whole UI thread queue, so the ones
-// posted to the child are swallowed with them. Menu tracking holds the queue the same way.
+// posted to the child are swallowed with them. Menu tracking holds the queue the same way, and a
+// press the game still holds capture for feeds the user's moves in past the lock.
 fn in_modal_loop(top: HWND) -> bool {
     // An unreadable state counts as idle: a gate stuck closed would block MAA for good.
     let thread = unsafe { GetWindowThreadProcessId(top, None) };
@@ -80,7 +80,7 @@ fn in_modal_loop(top: HWND) -> bool {
         return false;
     }
 
-    info.flags.0 & MODAL_FLAGS != 0
+    info.flags.0 & MODAL_FLAGS != 0 || !info.hwndCapture.0.is_null()
 }
 
 pub fn await_modal_end(top: HWND) -> Option<Duration> {
@@ -102,9 +102,7 @@ pub fn await_modal_end(top: HWND) -> Option<Duration> {
         }
 
         // Asked for on every pass by design; the tag's registry cooldown is what spaces the toasts out.
-        if started.elapsed() >= HOLD_WARN_DELAY {
-            display_notification(Notification::InputHeld);
-        }
+        display_notification(Notification::InputHeld);
         thread::sleep(HOLD_POLL);
     }
 }

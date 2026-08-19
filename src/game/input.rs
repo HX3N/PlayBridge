@@ -2,7 +2,13 @@ use std::{thread, time::Duration};
 
 use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
-    UI::WindowsAndMessaging::{PostMessageW, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_KEYUP},
+    System::Threading::{AttachThreadInput, GetCurrentThreadId},
+    UI::{
+        Input::KeyboardAndMouse::{EnableWindow, ReleaseCapture},
+        WindowsAndMessaging::{
+            GetGUIThreadInfo, GetWindowThreadProcessId, PostMessageW, GUITHREADINFO, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_KEYUP,
+        },
+    },
 };
 
 use crate::game::window::GameWindow;
@@ -12,6 +18,36 @@ const TEXT_INPUT_DELAY_MS: u64 = 50;
 
 pub fn post_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) {
     unsafe { _ = PostMessageW(Some(hwnd), msg, wparam, lparam) };
+}
+
+// Disabling is inherited by the child the game draws into, but it only turns away input the system
+// routes by hit-testing, and a press hands the game mouse capture, which skips that routing.
+pub fn set_input_enabled(top: HWND, enabled: bool) {
+    unsafe { _ = EnableWindow(top, enabled) };
+}
+
+// Capture belongs to the holder's input state, so it cannot be released from outside without
+// sharing that state for the call.
+pub fn release_game_capture(top: HWND) -> bool {
+    let target = unsafe { GetWindowThreadProcessId(top, None) };
+    if target == 0 {
+        return false;
+    }
+
+    let mut info = GUITHREADINFO { cbSize: std::mem::size_of::<GUITHREADINFO>() as u32, ..Default::default() };
+    if unsafe { GetGUIThreadInfo(target, &mut info) }.is_err() || info.hwndCapture.0.is_null() {
+        return false;
+    }
+
+    let ours = unsafe { GetCurrentThreadId() };
+    unsafe {
+        if !AttachThreadInput(ours, target, true).as_bool() {
+            return false;
+        }
+        let released = ReleaseCapture().is_ok();
+        _ = AttachThreadInput(ours, target, false);
+        released
+    }
 }
 
 pub fn terminate(window: &GameWindow) {

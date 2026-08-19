@@ -8,7 +8,7 @@ use crate::sys::logging::{debug_log, LogLevel, LogMode};
 use winrt_toast::{
     content::action::{Action, ActivationType},
     content::text::TextPlacement,
-    register, Scenario, Toast, ToastManager,
+    register, Scenario, Toast, ToastDuration, ToastManager,
 };
 
 const AUM_ID: &str = "PlayBridge";
@@ -116,8 +116,8 @@ impl Notification {
                 "ADB Input은 지원하지 않아요\nMinitouch로 전환해주세요".into(),
             ),
             Self::InputHeld => (
-                "Input is paused while you move or resize the window\nHolding it too long can disrupt MAA".into(),
-                "창을 조작하는 동안 입력을 잠시 멈춰 두고 있어요\n오래 붙잡고 있으면 MAA 작업에 문제가 생길 수 있어요".into(),
+                "Input is paused while you adjust the window\nHolding it too long can disrupt MAA".into(),
+                "창을 조작하는 동안 입력을 잠시 멈췄어요\n오래 붙잡고 있으면 문제가 생길 수 있어요".into(),
             ),
         };
         if config().client == Client::KR {
@@ -134,7 +134,7 @@ impl Notification {
             | Self::UnsupportedClient(..)
             | Self::ClientMismatch(..)
             | Self::GameNotInstalled(..) => Some(10),
-            Self::InputHeld => Some(5),
+            Self::InputHeld => Some(10),
             Self::WindowParked => Some(2),
             _ => None,
         }
@@ -195,6 +195,7 @@ pub fn display_notification(notification: Notification) {
         .text2(winrt_toast::content::text::Text::new(&body))
         .text3(winrt_toast::content::text::Text::new(format!("tag: {}", tag)).with_placement(TextPlacement::Attribution));
     toast.scenario(Scenario::Reminder);
+    toast.duration(ToastDuration::Short);
 
     if let Some(action) = notification.action() {
         toast.action(action);
