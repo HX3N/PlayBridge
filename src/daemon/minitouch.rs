@@ -1,75 +1,20 @@
 use std::{
     io::{self, BufRead},
-    thread,
     time::Duration,
 };
 
 use windows::Win32::{
-    Foundation::{HWND, LPARAM, WPARAM},
-    UI::WindowsAndMessaging::{
-        IsWindow, PostMessageW, WM_CANCELMODE, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
-    },
+    Foundation::{LPARAM, WPARAM},
+    UI::WindowsAndMessaging::{IsWindow, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE},
 };
 
-use crate::{
-    capture::capture_touch_overlay,
-    config::{DISPLAY_HEIGHT, DISPLAY_WIDTH},
-    logging::{debug_log, LogLevel, LogMode},
-    window::{describe_window, parent_or_self, GameWindow},
-};
+use crate::game::capture::capture_touch_overlay;
+use crate::game::input::{adb_keycode_to_vk, get_relative_point, key_down, key_up, post_message};
+use crate::game::window::{await_modal_end, describe_window, parent_or_self, GameWindow};
+use crate::sys::config::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use crate::sys::logging::{debug_log, LogLevel, LogMode};
 
-const TEXT_INPUT_DELAY_MS: u64 = 50;
-
-pub fn post_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) {
-    unsafe { _ = PostMessageW(Some(hwnd), msg, wparam, lparam) };
-}
-
-pub fn send_cancel_mode(hwnd: HWND) {
-    let target_hwnd = parent_or_self(hwnd);
-    post_message(target_hwnd, WM_CANCELMODE, WPARAM(0), LPARAM(0));
-}
-
-pub fn terminate(window: &GameWindow) {
-    post_message(window.hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
-}
-
-pub fn get_relative_point(x: i32, y: i32, w: i32, h: i32) -> isize {
-    let nx = (x as f32 / DISPLAY_WIDTH as f32 * w as f32).round() as isize;
-    let ny = (y as f32 / DISPLAY_HEIGHT as f32 * h as f32).round() as isize;
-    ny << 16 | nx
-}
-
-fn adb_keycode_to_vk(adb_keycode: i32) -> Option<i32> {
-    match adb_keycode {
-        111 => Some(0x1B), // KEYCODE_ESCAPE -> VK_ESCAPE
-        _ => None,
-    }
-}
-
-fn key_down(window: &GameWindow, vk_code: i32) {
-    let lparam = LPARAM((vk_code << 16) as isize);
-    post_message(window.hwnd, WM_KEYDOWN, WPARAM(vk_code as usize), lparam);
-}
-
-fn key_up(window: &GameWindow, vk_code: i32) {
-    let lparam = LPARAM((vk_code << 16 | 1 << 30 | 1 << 31) as isize);
-    post_message(window.hwnd, WM_KEYUP, WPARAM(vk_code as usize), lparam);
-}
-
-pub fn input_keyevent(window: &GameWindow, adb_keycode: i32) {
-    let Some(vk_code) = adb_keycode_to_vk(adb_keycode) else {
-        return;
-    };
-    key_down(window, vk_code);
-    key_up(window, vk_code);
-}
-
-pub fn input_text(window: &GameWindow, text: &str) {
-    for ch in text.chars() {
-        post_message(window.hwnd, WM_CHAR, WPARAM(ch as usize), LPARAM(0));
-        thread::sleep(Duration::from_millis(TEXT_INPUT_DELAY_MS));
-    }
-}
+const RESUME_LIMIT: Duration = Duration::from_millis(500);
 
 // GameWindow::find() re-enumerates every window, so the cached handle is reused while it stays alive.
 fn refresh_window(window: Option<GameWindow>, w_width: &mut i32, w_height: &mut i32) -> Option<GameWindow> {
@@ -154,6 +99,44 @@ pub fn run_minitouch_daemon() {
             "c" => {
                 window = refresh_window(window, &mut w_width, &mut w_height);
 
+                let held = match window.as_ref().map(|w| parent_or_self(w.hwnd)) {
+                    Some(top) => await_modal_end(top),
+                    None => Some(Duration::ZERO),
+                };
+                let Some(held) = held else {
+                    window = None;
+                    is_down = false;
+                    touch_path.clear();
+                    continue;
+                };
+
+                // A resize during the hold lands a new client size, so the one read before it is stale.
+                if !held.is_zero() {
+                    let before = (w_width, w_height);
+                    window = refresh_window(window, &mut w_width, &mut w_height);
+
+                    if is_down {
+                        let resized = (w_width, w_height) != before;
+                        let discard = window.is_none() || resized || held >= RESUME_LIMIT;
+                        if let Some(win) = window.as_ref() {
+                            if discard {
+                                let (x, y) = touch_path.last().copied().unwrap_or_default();
+                                last_relative_pos = get_relative_point(x, y, w_width, w_height);
+                                post_message(win.hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(last_relative_pos));
+                                post_message(win.hwnd, WM_LBUTTONUP, WPARAM(1), LPARAM(last_relative_pos));
+                                let reason = if resized { "window resized" } else { "held too long" };
+                                debug_log(LogLevel::Info, LogMode::End, &format!("Minitouch: touch discarded after hold ({})", reason));
+                            } else {
+                                post_message(win.hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(last_relative_pos));
+                            }
+                        }
+                        if discard {
+                            is_down = false;
+                            touch_path.clear();
+                        }
+                    }
+                }
+
                 let Some(win) = window.as_ref() else {
                     // Nothing to press against, so the press is forgotten and a rebind starts from a fresh DOWN.
                     is_down = false;
@@ -165,7 +148,6 @@ pub fn run_minitouch_daemon() {
                     let pos = get_relative_point(x, y, w_width, w_height);
                     if !is_down {
                         debug_log(LogLevel::Info, LogMode::Start, &format!("Minitouch: DOWN at x={}, y={}", x, y));
-                        send_cancel_mode(win.hwnd);
                         post_message(win.hwnd, WM_MOUSEMOVE, WPARAM(1), LPARAM(pos));
                         post_message(win.hwnd, WM_LBUTTONDOWN, WPARAM(1), LPARAM(pos));
                         is_down = true;

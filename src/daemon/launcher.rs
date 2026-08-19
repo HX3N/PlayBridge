@@ -7,24 +7,18 @@ use std::{
 };
 
 use win_screenshot::prelude::*;
-use windows::core::PCWSTR;
-use windows::Win32::{
-    Foundation::{HWND, RECT},
-    UI::WindowsAndMessaging::{FindWindowExW, GetClassNameW, GetClientRect, GetParent, IsIconic, ShowWindow, SW_RESTORE},
-};
+use windows::Win32::Foundation::HWND;
 
-use crate::config::{config, set_client, Client};
-use crate::logging::{debug_log, LogLevel, LogMode};
-use crate::notification::{display_notification, Notification};
+use crate::game::window::{get_window_class, GameWindow};
 use crate::shared::{CREATE_NO_WINDOW, DETACHED_PROCESS};
-use crate::wgc::{already_running, mutex_exists};
+use crate::sys::config::{config, set_client, Client};
+use crate::sys::logging::{debug_log, LogLevel, LogMode};
+use crate::sys::notification::{display_notification, Notification};
+use crate::sys::process::{already_running, mutex_exists};
 
 const WRAPPER_CLASS: &str = "HwndWrapper";
-const CROSVM_CLASS: &str = "CROSVM_1";
 
 const LOADING_TITLE: &str = "Google Play Games";
-
-const WINDOW_RESTORE_DELAY_MS: u64 = 300;
 
 pub const LAUNCHER_ARG: &str = "--launcher-daemon";
 const LAUNCHER_MUTEX: &str = "Local\\PlayBridgeLauncher";
@@ -34,66 +28,14 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(180);
 const LAUNCH_POLL: Duration = Duration::from_millis(500);
 const LAUNCH_RETRY_COOLDOWN: Duration = Duration::from_secs(10);
 
-pub fn parent_or_self(hwnd: HWND) -> HWND {
-    unsafe { GetParent(hwnd).ok().filter(|p| !p.0.is_null()).unwrap_or(hwnd) }
-}
-
-pub struct GameWindow {
-    pub hwnd: HWND,
-}
-
-impl GameWindow {
-    pub fn find() -> Option<Self> {
-        let (hwnd, client) = window_list().ok()?.into_iter().find_map(|win| {
-            let client = resolve_client_by_title(&win.window_name)?;
-            let child = find_crosvm_child(HWND(win.hwnd as usize as *mut c_void))?;
-            Some((child, client))
-        })?;
-
-        adopt_running_client(client);
-        Some(Self { hwnd })
-    }
-
-    pub fn restore(&self) {
-        let target_hwnd = parent_or_self(self.hwnd);
-
-        if unsafe { IsIconic(target_hwnd).as_bool() } {
-            unsafe { _ = ShowWindow(target_hwnd, SW_RESTORE) };
-            thread::sleep(Duration::from_millis(WINDOW_RESTORE_DELAY_MS));
-        }
-    }
-
-    pub fn get_client_size(&self) -> (i32, i32) {
-        let mut rect = RECT::default();
-        if unsafe { GetClientRect(self.hwnd, &mut rect) }.is_ok() {
-            (rect.right - rect.left, rect.bottom - rect.top)
-        } else {
-            (0, 0)
-        }
-    }
-}
-
-/// Notification language is picked by the stored client, so the update lands before the toast.
-fn adopt_running_client(client: Client) {
-    let previous = config().client;
-    if previous == client {
-        return;
-    }
-    set_client(client);
-
-    if previous != Client::Empty {
-        display_notification(Notification::ClientMismatch(previous.package().to_string(), client.package().to_string()));
-    }
-}
-
 /// Two clients installed side by side is assumed not to happen, and is not guessed at.
-fn adopt_installed_client() -> Option<crate::store::AppRecord> {
+fn adopt_installed_client() -> Option<crate::sys::store::AppRecord> {
     let previous = config().client;
 
     let mut installed = [Client::KR, Client::JP, Client::EN]
         .into_iter()
         .filter(|&client| client != previous)
-        .filter_map(|client| crate::store::app_record(client.package()).map(|record| (client, record)));
+        .filter_map(|client| crate::sys::store::app_record(client.package()).map(|record| (client, record)));
 
     let (client, record) = installed.next()?;
     if installed.next().is_some() {
@@ -159,7 +101,7 @@ pub fn run_launcher_daemon() {
     }
 
     // Without this the launch URI only raises GPG's own window, which reads as a loading screen forever.
-    let Some(app) = crate::store::app_record(package).or_else(adopt_installed_client) else {
+    let Some(app) = crate::sys::store::app_record(package).or_else(adopt_installed_client) else {
         display_notification(Notification::GameNotInstalled(package.to_string()));
         debug_log(LogLevel::Warn, LogMode::End, "Launcher: game not installed");
         return;
@@ -176,7 +118,7 @@ pub fn run_launcher_daemon() {
 
     while started.elapsed() < LAUNCH_TIMEOUT {
         // Detached from MAA, so nothing else would end it.
-        if !crate::maa::is_alive() {
+        if !crate::sys::maa::is_alive() {
             debug_log(LogLevel::Info, LogMode::End, "Launcher: MAA gone, stopped");
             return;
         }
@@ -215,20 +157,6 @@ fn resolve_client(package: &str) -> Option<Client> {
         .find(|&client| package.starts_with(client.package()))
 }
 
-fn resolve_client_by_title(title: &str) -> Option<Client> {
-    [Client::KR, Client::JP, Client::EN].into_iter().find(|&client| title.starts_with(client.title()))
-}
-
-fn find_crosvm_child(parent_hwnd: HWND) -> Option<HWND> {
-    let crosvm_class_wide: Vec<u16> = CROSVM_CLASS.encode_utf16().chain(Some(0)).collect();
-
-    unsafe {
-        FindWindowExW(Some(parent_hwnd), None, PCWSTR(crosvm_class_wide.as_ptr()), None)
-            .ok()
-            .filter(|h| !h.0.is_null())
-    }
-}
-
 fn is_loading_screen_active() -> bool {
     window_list().unwrap_or_default().into_iter().any(|i| {
         if i.window_name == LOADING_TITLE {
@@ -239,26 +167,4 @@ fn is_loading_screen_active() -> bool {
         }
         false
     })
-}
-
-fn get_window_class(hwnd: HWND) -> Option<String> {
-    let mut buffer: [u16; 256] = [0; 256];
-    unsafe {
-        let len = GetClassNameW(hwnd, &mut buffer);
-        if len > 0 {
-            Some(String::from_utf16_lossy(&buffer[..len as usize]))
-        } else {
-            None
-        }
-    }
-}
-
-/// Bound-window log summary. client is the child's physical size the WGC frame pool binds to, so a change forces a rebind.
-pub(crate) fn describe_window(child: HWND, top: Option<HWND>) -> String {
-    let class = get_window_class(child).unwrap_or_default();
-    let (w, h) = GameWindow { hwnd: child }.get_client_size();
-    match top {
-        Some(t) => format!("top=0x{:X} child=0x{:X} class={} client={}x{}", t.0 as usize, child.0 as usize, class, w, h),
-        None => format!("child=0x{:X} class={} client={}x{}", child.0 as usize, class, w, h),
-    }
 }

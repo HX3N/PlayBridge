@@ -6,8 +6,8 @@ use winreg::{
     RegKey,
 };
 
-use crate::logging::{debug_log, reply, LogLevel, LogMode};
-use crate::notification::{display_notification, Notification};
+use crate::sys::logging::{debug_log, reply, LogLevel, LogMode};
+use crate::sys::notification::{display_notification, Notification};
 
 pub use crate::shared::{DISPLAY_HEIGHT, DISPLAY_WIDTH, REG_PATH_STATE};
 

@@ -14,12 +14,12 @@ use std::time::{Duration, Instant};
 
 type FrameLatest = Arc<Mutex<Option<(Vec<u8>, u32, u32, Instant)>>>;
 
-use windows::core::{IInspectable, Interface, PCWSTR};
+use windows::core::{IInspectable, Interface};
 use windows::Foundation::TypedEventHandler;
 use windows::Graphics::Capture::{Direct3D11CaptureFrame, Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession};
 use windows::Graphics::DirectX::Direct3D11::IDirect3DSurface;
 use windows::Graphics::DirectX::DirectXPixelFormat;
-use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HMODULE, HWND, POINT, RECT};
+use windows::Win32::Foundation::{HMODULE, HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL};
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
@@ -33,18 +33,19 @@ use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
-use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
 use windows::Win32::System::WinRT::Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess};
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetClientRect, IsWindow, GA_ROOT};
 
-use crate::capture::{black_frame_pixels, resize_to_display, transmit_pixels_nc};
-use crate::config::{config, get_registry, set_registry, DISPLAY_HEIGHT, DISPLAY_WIDTH, REG_PATH_STATE};
-use crate::logging::{debug_log, LogLevel, LogMode};
-use crate::notification::{display_notification, Notification};
+use crate::daemon::launcher::ensure_launcher;
+use crate::daemon::window_state::{adopt_stale_park, spawn_minimize_watcher, ActivationWatch, ParkState};
+use crate::game::capture::{black_frame_pixels, resize_to_display, transmit_pixels_nc};
+use crate::game::window::{describe_window, GameWindow};
 use crate::shared::{CREATE_NO_WINDOW, DETACHED_PROCESS, KEY_DAEMON_PORT};
-use crate::window::{describe_window, ensure_launcher, GameWindow};
-use crate::window_state::{adopt_stale_park, spawn_minimize_watcher, ActivationWatch, ParkState};
+use crate::sys::config::{config, get_registry, set_registry, DISPLAY_HEIGHT, DISPLAY_WIDTH, REG_PATH_STATE};
+use crate::sys::logging::{debug_log, LogLevel, LogMode};
+use crate::sys::notification::{display_notification, Notification};
+use crate::sys::process::already_running;
 
 const DAEMON_MUTEX: &str = "Local\\PlayBridgeWgcDaemon";
 // MAA's lifetime ends the daemon; idling only drops capture to low power.
@@ -74,7 +75,7 @@ fn check_render_resolution() {
     if package.is_empty() {
         return;
     }
-    let Some((w, h)) = crate::store::render_resolution(package) else {
+    let Some((w, h)) = crate::sys::store::render_resolution(package) else {
         return;
     };
 
@@ -451,30 +452,6 @@ impl WgcCapture {
     }
 }
 
-/// Claims the name for this process, so only a process that means to *be* the daemon may call it.
-pub fn already_running(mutex_name: &str) -> bool {
-    let name: Vec<u16> = mutex_name.encode_utf16().chain(Some(0)).collect();
-    unsafe {
-        let _ = CreateMutexW(None, false, PCWSTR(name.as_ptr()));
-        GetLastError() == ERROR_ALREADY_EXISTS
-    }
-}
-
-/// Checks without claiming, which `already_running` cannot do: creating the mutex would make the
-/// caller its owner and every later check would report a daemon that never started.
-pub fn mutex_exists(mutex_name: &str) -> bool {
-    let name: Vec<u16> = mutex_name.encode_utf16().chain(Some(0)).collect();
-    match unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, PCWSTR(name.as_ptr())) } {
-        Ok(handle) => {
-            unsafe {
-                let _ = CloseHandle(handle);
-            }
-            true
-        }
-        Err(_) => false,
-    }
-}
-
 // HWNDs and the COM handles inside WgcCapture aren't Send, but the daemon is MTA and the frame pool is free-threaded,
 // so building a session on a worker thread and handing it to the serve loop is sound — this wrapper carries it across.
 struct AssertSend<T>(T);
@@ -681,7 +658,7 @@ pub fn run_daemon() {
 
         if last_maa_check.elapsed() >= MAA_CHECK_INTERVAL {
             last_maa_check = Instant::now();
-            if !crate::maa::is_alive() {
+            if !crate::sys::maa::is_alive() {
                 maa_gone = true;
                 break;
             }

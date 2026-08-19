@@ -10,7 +10,7 @@ use std::{
 
 use chrono::Local;
 
-use crate::notification::{display_notification, Notification};
+use crate::sys::notification::{display_notification, Notification};
 
 #[derive(Copy, Clone)]
 pub enum LogLevel {

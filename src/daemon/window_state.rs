@@ -18,10 +18,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WINEVENT_OUTOFCONTEXT, WS_POPUP,
 };
 
-use crate::config::{get_registry, set_registry, REG_PATH_STATE};
-use crate::logging::{debug_log, LogLevel, LogMode};
-use crate::notification::{display_notification, Notification};
-use crate::window::GameWindow;
+use crate::game::window::GameWindow;
+use crate::sys::config::{get_registry, set_registry, REG_PATH_STATE};
+use crate::sys::logging::{debug_log, LogLevel, LogMode};
+use crate::sys::notification::{display_notification, Notification};
 
 // Written only while parked, so finding it at startup means the last daemon died parked.
 const PARK_HOME_KEY: &str = "PARK_HOME";

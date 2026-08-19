@@ -15,10 +15,10 @@ use fast_image_resize::{
 use image::{codecs::png::PngEncoder, Rgba, RgbaImage};
 use win_screenshot::prelude::{capture_window_ex, Area, Using};
 
-use crate::config::*;
-use crate::logging::{debug_log, get_debug_folder, LogLevel, LogMode};
-use crate::notification::{display_notification, Notification};
-use crate::window::GameWindow;
+use crate::game::window::GameWindow;
+use crate::sys::config::*;
+use crate::sys::logging::{debug_log, get_debug_folder, LogLevel, LogMode};
+use crate::sys::notification::{display_notification, Notification};
 
 const LOOPBACK_IP: &str = "127.0.0.1";
 const TCP_TIMEOUT_MS: u64 = 100;

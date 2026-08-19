@@ -3,8 +3,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::config::*;
-use crate::logging::{debug_log, LogLevel, LogMode};
+use crate::sys::config::*;
+use crate::sys::logging::{debug_log, LogLevel, LogMode};
 use winrt_toast::{
     content::action::{Action, ActivationType},
     content::text::TextPlacement,
@@ -17,7 +17,7 @@ const DISPLAY_NAME: &str = "PlayBridge";
 // config.rs holds the API endpoint, which a user cannot open in a browser.
 const RELEASES_URL: &str = "https://github.com/HX3N/PlayBridge/releases/latest";
 
-const ICON_DATA: &[u8] = include_bytes!("../assets/icon.png");
+const ICON_DATA: &[u8] = include_bytes!("../../assets/icon.png");
 
 #[derive(Debug)]
 pub enum Notification {
@@ -34,6 +34,7 @@ pub enum Notification {
     ClientMismatch(String, String),
     GameNotInstalled(String),
     AdbInputUnsupported,
+    InputHeld,
 }
 
 impl Notification {
@@ -45,7 +46,8 @@ impl Notification {
             | Self::UnsupportedClient(..)
             | Self::ClientMismatch(..)
             | Self::GameNotInstalled(..)
-            | Self::AdbInputUnsupported => LogLevel::Warn,
+            | Self::AdbInputUnsupported
+            | Self::InputHeld => LogLevel::Warn,
 
             // Wrong render aspect ratio distorts everything MAA reads, so it ranks with the hard failures, not warnings.
             Self::ScreenshotFailed | Self::WindowWrongRatio(..) | Self::UnknownCommand(..) | Self::Panic(..) => LogLevel::Error,
@@ -113,6 +115,10 @@ impl Notification {
                 "ADB Input is not supported\nPlease switch to Minitouch".into(),
                 "ADB Input은 지원하지 않아요\nMinitouch로 전환해주세요".into(),
             ),
+            Self::InputHeld => (
+                "Input is paused while you move or resize the window\nHolding it too long can disrupt MAA".into(),
+                "창을 조작하는 동안 입력을 잠시 멈춰 두고 있어요\n오래 붙잡고 있으면 MAA 작업에 문제가 생길 수 있어요".into(),
+            ),
         };
         if config().client == Client::KR {
             kr
@@ -128,6 +134,7 @@ impl Notification {
             | Self::UnsupportedClient(..)
             | Self::ClientMismatch(..)
             | Self::GameNotInstalled(..) => Some(10),
+            Self::InputHeld => Some(5),
             Self::WindowParked => Some(2),
             _ => None,
         }
