@@ -9,8 +9,6 @@ use winreg::{
 use crate::sys::logging::{debug_log, reply, LogLevel, LogMode};
 use crate::sys::notification::{display_notification, Notification};
 
-pub use crate::shared::{DISPLAY_HEIGHT, DISPLAY_WIDTH, REG_PATH_STATE};
-
 const REPOSITORY_URL: &str = "https://api.github.com/repos/HX3N/PlayBridge/releases/latest";
 
 pub const REG_PATH_CONFIG: &str = r"Software\PlayBridge\config";
@@ -185,7 +183,14 @@ pub fn check_for_update() {
 }
 
 pub fn toggle_touch_overlay() {
-    toggle_config("TOUCH_OVERLAY");
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hkcu.create_subkey(REG_PATH_CONFIG).unwrap();
+    let current_val: u32 = key.get_value("TOUCH_OVERLAY").unwrap_or(0);
+    let new_val: u32 = if current_val == 0 { 1 } else { 0 };
+    key.set_value("TOUCH_OVERLAY", &new_val).unwrap();
+
+    let status = if new_val == 1 { "ON" } else { "OFF" };
+    reply(&format!("TOUCH_OVERLAY: {}", status));
 }
 
 pub fn get_registry<T: FromRegValue>(key_name: &str, default: T, path: &str) -> T {
@@ -198,15 +203,4 @@ pub fn set_registry<T: ToRegValue>(key_name: &str, value: T, path: &str) -> std:
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu.create_subkey(path)?;
     key.set_value(key_name, &value)
-}
-
-fn toggle_config(key_name: &str) {
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hkcu.create_subkey(REG_PATH_CONFIG).unwrap();
-    let current_val: u32 = key.get_value(key_name).unwrap_or(0);
-    let new_val: u32 = if current_val == 0 { 1 } else { 0 };
-    key.set_value(key_name, &new_val).unwrap();
-
-    let status = if new_val == 1 { "ON" } else { "OFF" };
-    reply(&format!("{}: {}", key_name, status));
 }

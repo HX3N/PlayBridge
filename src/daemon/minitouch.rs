@@ -13,8 +13,8 @@ use windows::Win32::{
 
 use crate::game::capture::capture_touch_overlay;
 use crate::game::input::{adb_keycode_to_vk, get_relative_point, key_down, key_up, post_message, release_game_capture, set_input_enabled};
-use crate::game::window::{await_modal_end, describe_window, parent_or_self, GameWindow};
-use crate::sys::config::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use crate::game::window::{await_modal_end, describe_window, top_level, GameWindow};
+use crate::shared::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use crate::sys::logging::{debug_log, LogLevel, LogMode};
 
 const LOCK_GRACE: Duration = Duration::from_millis(300);
@@ -131,7 +131,7 @@ fn refresh_window(window: Option<GameWindow>, w_width: &mut i32, w_height: &mut 
     *w_width = w;
     *w_height = h;
     // A daemon that died mid-swipe leaves the window refusing input, so a fresh bind clears it.
-    set_input_enabled(parent_or_self(new_win.hwnd), true);
+    set_input_enabled(top_level(new_win.hwnd), true);
     debug_log(LogLevel::Info, LogMode::Plain, &format!("Minitouch: bound {}", describe_window(new_win.hwnd, None)));
     Some(new_win)
 }
@@ -213,7 +213,7 @@ pub fn run_minitouch_daemon() {
             "c" => {
                 window = refresh_window(window, &mut w_width, &mut w_height);
 
-                let Some(top) = window.as_ref().map(|w| parent_or_self(w.hwnd)) else {
+                let Some(top) = window.as_ref().map(|w| top_level(w.hwnd)) else {
                     if is_down {
                         debug_log(LogLevel::Warn, LogMode::Plain, "Minitouch: touch dropped, window gone");
                     }

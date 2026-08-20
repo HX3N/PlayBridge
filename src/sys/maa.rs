@@ -16,8 +16,8 @@ use windows::Win32::{
     },
 };
 
-use crate::shared::KEY_MAA_PID;
-use crate::sys::config::{get_registry, REG_PATH_STATE};
+use crate::shared::{KEY_MAA_PID, REG_PATH_STATE};
+use crate::sys::config::get_registry;
 
 const CONFIG_RELATIVE_PATH: &str = "config/gui.new.json";
 

@@ -5,8 +5,8 @@ use crate::daemon::wgc;
 use crate::game::capture;
 use crate::game::input;
 use crate::game::window::GameWindow;
-use crate::shared;
-use crate::sys::config::{self, check_for_update, check_version, set_client, toggle_touch_overlay, Client, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use crate::shared::{self, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use crate::sys::config::{self, check_for_update, check_version, set_client, toggle_touch_overlay, Client};
 use crate::sys::logging::{debug_log, reply, LogLevel, LogMode};
 use crate::sys::maa;
 use crate::sys::notification::{display_notification, Notification};
@@ -94,7 +94,7 @@ pub fn parse_command(args: &[String]) -> Command {
 /// False means MAA is set to a client with no Google Play Games package, so nothing should be launched.
 fn apply_maa_client() -> bool {
     if let Some(pid) = maa::parent_pid() {
-        let _ = config::set_registry(shared::KEY_MAA_PID, pid, config::REG_PATH_STATE);
+        let _ = config::set_registry(shared::KEY_MAA_PID, pid, shared::REG_PATH_STATE);
     }
 
     let Some(client_type) = maa::client_type() else {

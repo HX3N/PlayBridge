@@ -9,8 +9,8 @@ use windows::core::PCWSTR;
 use windows::Win32::{
     Foundation::{HWND, RECT},
     UI::WindowsAndMessaging::{
-        FindWindowExW, GetClassNameW, GetClientRect, GetGUIThreadInfo, GetParent, GetWindowThreadProcessId, IsIconic, IsWindow, ShowWindow,
-        GUITHREADINFO, GUI_INMENUMODE, GUI_INMOVESIZE, GUI_POPUPMENUMODE, GUI_SYSTEMMENUMODE, SW_RESTORE,
+        FindWindowExW, GetAncestor, GetClassNameW, GetClientRect, GetGUIThreadInfo, GetWindowThreadProcessId, IsIconic, IsWindow,
+        ShowWindow, GA_ROOT, GUITHREADINFO, GUI_INMENUMODE, GUI_INMOVESIZE, GUI_POPUPMENUMODE, GUI_SYSTEMMENUMODE, SW_RESTORE,
     },
 };
 
@@ -26,8 +26,19 @@ const HOLD_POLL: Duration = Duration::from_millis(5);
 
 const MODAL_FLAGS: u32 = GUI_INMOVESIZE.0 | GUI_INMENUMODE.0 | GUI_SYSTEMMENUMODE.0 | GUI_POPUPMENUMODE.0;
 
-pub fn parent_or_self(hwnd: HWND) -> HWND {
-    unsafe { GetParent(hwnd).ok().filter(|p| !p.0.is_null()).unwrap_or(hwnd) }
+pub fn top_level(hwnd: HWND) -> HWND {
+    unsafe { GetAncestor(hwnd, GA_ROOT) }
+}
+
+pub fn gui_thread_info(hwnd: HWND) -> Option<(u32, GUITHREADINFO)> {
+    let thread = unsafe { GetWindowThreadProcessId(hwnd, None) };
+    if thread == 0 {
+        return None;
+    }
+
+    let mut info = GUITHREADINFO { cbSize: std::mem::size_of::<GUITHREADINFO>() as u32, ..Default::default() };
+    unsafe { GetGUIThreadInfo(thread, &mut info) }.ok()?;
+    Some((thread, info))
 }
 
 pub struct GameWindow {
@@ -47,7 +58,7 @@ impl GameWindow {
     }
 
     pub fn restore(&self) {
-        let target_hwnd = parent_or_self(self.hwnd);
+        let target_hwnd = top_level(self.hwnd);
 
         if unsafe { IsIconic(target_hwnd).as_bool() } {
             unsafe { _ = ShowWindow(target_hwnd, SW_RESTORE) };
@@ -69,15 +80,9 @@ impl GameWindow {
 // to the child are swallowed with them — as do menu tracking and a press the game still holds capture for.
 fn in_modal_loop(top: HWND) -> bool {
     // An unreadable state counts as idle: a gate stuck closed would block MAA for good.
-    let thread = unsafe { GetWindowThreadProcessId(top, None) };
-    if thread == 0 {
+    let Some((_, info)) = gui_thread_info(top) else {
         return false;
-    }
-
-    let mut info = GUITHREADINFO { cbSize: std::mem::size_of::<GUITHREADINFO>() as u32, ..Default::default() };
-    if unsafe { GetGUIThreadInfo(thread, &mut info) }.is_err() {
-        return false;
-    }
+    };
 
     info.flags.0 & MODAL_FLAGS != 0 || !info.hwndCapture.0.is_null()
 }

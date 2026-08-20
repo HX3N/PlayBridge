@@ -5,14 +5,12 @@ use windows::Win32::{
     System::Threading::{AttachThreadInput, GetCurrentThreadId},
     UI::{
         Input::KeyboardAndMouse::{EnableWindow, ReleaseCapture},
-        WindowsAndMessaging::{
-            GetGUIThreadInfo, GetWindowThreadProcessId, PostMessageW, GUITHREADINFO, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_KEYUP,
-        },
+        WindowsAndMessaging::{PostMessageW, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_KEYUP},
     },
 };
 
-use crate::game::window::GameWindow;
-use crate::sys::config::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use crate::game::window::{gui_thread_info, GameWindow};
+use crate::shared::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 
 const TEXT_INPUT_DELAY_MS: u64 = 50;
 
@@ -27,13 +25,10 @@ pub fn set_input_enabled(top: HWND, enabled: bool) {
 // Capture belongs to the holder's input state, so it cannot be released from outside without
 // sharing that state for the call.
 pub fn release_game_capture(top: HWND) -> bool {
-    let target = unsafe { GetWindowThreadProcessId(top, None) };
-    if target == 0 {
+    let Some((target, info)) = gui_thread_info(top) else {
         return false;
-    }
-
-    let mut info = GUITHREADINFO { cbSize: std::mem::size_of::<GUITHREADINFO>() as u32, ..Default::default() };
-    if unsafe { GetGUIThreadInfo(target, &mut info) }.is_err() || info.hwndCapture.0.is_null() {
+    };
+    if info.hwndCapture.0.is_null() {
         return false;
     }
 

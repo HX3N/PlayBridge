@@ -35,14 +35,14 @@ use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use windows::Win32::System::WinRT::Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess};
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
-use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetClientRect, IsWindow, GA_ROOT};
+use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, IsWindow};
 
 use crate::daemon::launcher::ensure_launcher;
 use crate::daemon::window_state::{adopt_stale_park, spawn_minimize_watcher, ActivationWatch, ParkState};
 use crate::game::capture::{black_frame_pixels, resize_to_display, transmit_pixels_nc};
-use crate::game::window::{describe_window, GameWindow};
-use crate::shared::{CREATE_NO_WINDOW, DETACHED_PROCESS, KEY_DAEMON_PORT};
-use crate::sys::config::{config, get_registry, set_registry, DISPLAY_HEIGHT, DISPLAY_WIDTH, REG_PATH_STATE};
+use crate::game::window::{describe_window, top_level, GameWindow};
+use crate::shared::{CREATE_NO_WINDOW, DETACHED_PROCESS, DISPLAY_HEIGHT, DISPLAY_WIDTH, KEY_DAEMON_PORT, REG_PATH_STATE};
+use crate::sys::config::{config, get_registry, set_registry};
 use crate::sys::logging::{debug_log, LogLevel, LogMode};
 use crate::sys::notification::{display_notification, Notification};
 use crate::sys::process::already_running;
@@ -422,14 +422,6 @@ impl WgcCapture {
         Ok(Self { _device: device, _pool: pool, _session: session, latest, top, child, bound_client })
     }
 
-    pub fn child(&self) -> HWND {
-        self.child
-    }
-
-    pub fn bound_client(&self) -> (i32, i32) {
-        self.bound_client
-    }
-
     /// Grows once WGC stops delivering, which is the daemon's liveness signal for the window.
     pub fn latest_frame_age(&self) -> Option<Duration> {
         self.latest.lock().unwrap().as_ref().map(|(_, _, _, captured_at)| captured_at.elapsed())
@@ -493,7 +485,7 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     // stops composing too, so the last frame is still the current screen while the window lives.
     let t0 = Instant::now();
     let frame = cap.and_then(|c| c.latest_display_rgba()).filter(|(_, age, _)| {
-        *age < FRAME_STALE || (*age < FRAME_REUSE_LIMIT && cap.is_some_and(|c| unsafe { IsWindow(Some(c.child())).as_bool() }))
+        *age < FRAME_STALE || (*age < FRAME_REUSE_LIMIT && cap.is_some_and(|c| unsafe { IsWindow(Some(c.child)).as_bool() }))
     });
     let reused = frame.as_ref().is_some_and(|(_, age, _)| *age >= FRAME_STALE);
 
@@ -552,7 +544,7 @@ fn maintain(
 ) {
     // IsWindow stays true for a hidden-but-alive GPG tree; fresh frames are the real liveness signal.
     let w = match cap.as_ref() {
-        Some(c) if c.latest_frame_age().is_some_and(|age| age < FRAME_STALE) => Some(GameWindow { hwnd: c.child() }),
+        Some(c) if c.latest_frame_age().is_some_and(|age| age < FRAME_STALE) => Some(GameWindow { hwnd: c.child }),
         _ => GameWindow::find(),
     };
 
@@ -566,12 +558,12 @@ fn maintain(
             }
         }
         Some(w) => {
-            let top = unsafe { GetAncestor(w.hwnd, GA_ROOT) };
+            let top = top_level(w.hwnd);
             park.update(top);
             park.arm_hook(top);
             activation.update(top);
 
-            let needs_rebind = cap.as_ref().map(|c| w.hwnd != c.child() || w.get_client_size() != c.bound_client()).unwrap_or(true);
+            let needs_rebind = cap.as_ref().map(|c| w.hwnd != c.child || w.get_client_size() != c.bound_client).unwrap_or(true);
             if needs_rebind && !*building {
                 *building = true;
                 spawn_build(w.hwnd, top, build_tx.clone());
@@ -642,7 +634,7 @@ pub fn run_daemon() {
         if let Ok(AssertSend(built)) = build_rx.try_recv() {
             building = false;
             if let Some(c) = built {
-                debug_log(LogLevel::Info, LogMode::Plain, &format!("Wgc: bound {}", describe_window(c.child(), Some(c.top))));
+                debug_log(LogLevel::Info, LogMode::Plain, &format!("Wgc: bound {}", describe_window(c.child, Some(c.top))));
                 check_render_resolution();
                 cap = Some(c);
             }

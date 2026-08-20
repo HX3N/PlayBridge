@@ -16,7 +16,8 @@ use image::{codecs::png::PngEncoder, Rgba, RgbaImage};
 use win_screenshot::prelude::{capture_window_ex, Area, Using};
 
 use crate::game::window::GameWindow;
-use crate::sys::config::*;
+use crate::shared::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use crate::sys::config::{config, Config, MAX_TOUCH_OVERLAY_FILES};
 use crate::sys::logging::{debug_log, get_debug_folder, LogLevel, LogMode};
 use crate::sys::notification::{display_notification, Notification};
 

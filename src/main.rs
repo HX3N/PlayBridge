@@ -41,7 +41,7 @@ fn main() {
 
     // Publish exe path so the fake nemu DLL can spawn the WGC daemon.
     if let Ok(exe) = env::current_exe() {
-        let _ = sys::config::set_registry(shared::KEY_EXE_PATH, exe.to_string_lossy().as_ref(), sys::config::REG_PATH_STATE);
+        let _ = sys::config::set_registry(shared::KEY_EXE_PATH, exe.to_string_lossy().as_ref(), shared::REG_PATH_STATE);
     }
 
     // The daemon outlives this call, so the call block closes before it runs instead of after.

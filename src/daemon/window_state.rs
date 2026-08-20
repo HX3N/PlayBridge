@@ -11,15 +11,15 @@ use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
 use windows::Win32::UI::Input::KeyboardAndMouse::SetActiveWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DispatchMessageW, GetAncestor, GetForegroundWindow, GetGUIThreadInfo, GetMessageW, GetSystemMetrics,
-    GetWindowPlacement, GetWindowRect, GetWindowThreadProcessId, IsIconic, SetWindowPlacement, SetWindowPos, ShowWindow, TranslateMessage,
-    EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MINIMIZESTART, GA_ROOT, GUITHREADINFO, MSG, SM_CYVIRTUALSCREEN, SM_YVIRTUALSCREEN,
-    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_MINIMIZE, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WINDOW_EX_STYLE,
-    WINEVENT_OUTOFCONTEXT, WS_POPUP,
+    CreateWindowExW, DispatchMessageW, GetForegroundWindow, GetMessageW, GetSystemMetrics, GetWindowPlacement, GetWindowRect,
+    GetWindowThreadProcessId, IsIconic, SetWindowPlacement, SetWindowPos, ShowWindow, TranslateMessage, EVENT_SYSTEM_FOREGROUND,
+    EVENT_SYSTEM_MINIMIZESTART, MSG, SM_CYVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_MINIMIZE,
+    SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WINDOW_EX_STYLE, WINEVENT_OUTOFCONTEXT, WS_POPUP,
 };
 
-use crate::game::window::GameWindow;
-use crate::sys::config::{get_registry, set_registry, REG_PATH_STATE};
+use crate::game::window::{gui_thread_info, top_level, GameWindow};
+use crate::shared::REG_PATH_STATE;
+use crate::sys::config::{get_registry, set_registry};
 use crate::sys::logging::{debug_log, LogLevel, LogMode};
 use crate::sys::notification::{display_notification, Notification};
 
@@ -325,7 +325,7 @@ pub fn adopt_stale_park() {
         return;
     };
 
-    let top = unsafe { GetAncestor(win.hwnd, GA_ROOT) };
+    let top = top_level(win.hwnd);
     if !off_all_monitors(top) {
         clear_origin(PARK_HOME_KEY);
         debug_log(LogLevel::Warn, LogMode::Plain, "Park: stale record dropped, window is already on screen");
@@ -343,18 +343,12 @@ const ACTIVATION_REPAIR_DELAY: Duration = Duration::from_millis(500);
 const ACTIVATION_REPAIR_ATTEMPTS: u32 = 3;
 
 fn activation_is_stale(top: HWND) -> bool {
-    let thread = unsafe { GetWindowThreadProcessId(top, None) };
-    if thread == 0 {
+    let Some((_, info)) = gui_thread_info(top) else {
         return false;
-    }
-
-    let mut info = GUITHREADINFO { cbSize: std::mem::size_of::<GUITHREADINFO>() as u32, ..Default::default() };
-    if unsafe { GetGUIThreadInfo(thread, &mut info) }.is_err() {
-        return false;
-    }
+    };
 
     let foreground = unsafe { GetForegroundWindow() };
-    let owns_foreground = !foreground.0.is_null() && unsafe { GetAncestor(foreground, GA_ROOT) }.0 == top.0;
+    let owns_foreground = !foreground.0.is_null() && top_level(foreground).0 == top.0;
 
     !info.hwndActive.0.is_null() && !owns_foreground
 }

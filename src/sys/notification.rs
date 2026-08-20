@@ -3,7 +3,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use crate::sys::config::*;
+use crate::sys::config::{config, get_registry, set_registry, Client, REG_PATH_COOLDOWN};
 use crate::sys::logging::{debug_log, LogLevel, LogMode};
 use winrt_toast::{
     content::action::{Action, ActivationType},
