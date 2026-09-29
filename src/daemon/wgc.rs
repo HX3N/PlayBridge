@@ -39,7 +39,7 @@ use windows::Win32::UI::WindowsAndMessaging::{GetClientRect, IsWindow};
 
 use crate::daemon::launcher::ensure_launcher;
 use crate::daemon::window_state::{adopt_stale_park, spawn_minimize_watcher, ActivationWatch, ParkState};
-use crate::game::capture::{black_frame_pixels, resize_to_display, transmit_pixels_nc};
+use crate::game::capture::{resize_to_display_into, transmit_pixels_nc, DISPLAY_FRAME_BYTES};
 use crate::game::window::{describe_window, top_level, GameWindow};
 use crate::shared::{CREATE_NO_WINDOW, DETACHED_PROCESS, DISPLAY_HEIGHT, DISPLAY_WIDTH, KEY_DAEMON_PORT, REG_PATH_STATE};
 use crate::sys::config::{config, get_registry, set_registry};
@@ -105,9 +105,9 @@ fn check_render_resolution() {
 }
 
 fn write_extras_frame(stream: &mut TcpStream, rgba: &[u8]) {
-    let mut header = Vec::with_capacity(8);
-    header.extend_from_slice(&DISPLAY_WIDTH.to_le_bytes());
-    header.extend_from_slice(&DISPLAY_HEIGHT.to_le_bytes());
+    let mut header = [0u8; 8];
+    header[0..4].copy_from_slice(&DISPLAY_WIDTH.to_le_bytes());
+    header[4..8].copy_from_slice(&DISPLAY_HEIGHT.to_le_bytes());
     let _ = stream.write_all(&header);
     let _ = stream.write_all(rgba);
 }
@@ -266,10 +266,11 @@ fn crop_geometry(top: HWND, child: HWND) -> Option<(i32, i32, i32, i32)> {
     Some((cx, cy, cw, ch))
 }
 
-// Crop destination, reused so a multi-megabyte buffer isn't allocated and zeroed per request.
+// Crop and output buffers, reused so multi-megabyte buffers aren't allocated and zeroed per request.
 // The daemon serves from one thread, matching capture.rs's RESIZER.
 thread_local! {
     static CROP_BUF: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static FRAME_OUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
 }
 
 // DWM skips the right/bottom ~3px, so that edge arrives transparent and unrecoverable.
@@ -427,8 +428,8 @@ impl WgcCapture {
         self.latest.lock().unwrap().as_ref().map(|(_, _, _, captured_at)| captured_at.elapsed())
     }
 
-    /// Returns the RGBA frame, its age, and the crop+resize cost.
-    pub fn latest_display_rgba(&self) -> Option<(Vec<u8>, Duration, Duration)> {
+    /// Fills `out` with the RGBA frame and returns its age and the crop+resize cost.
+    pub fn latest_display_rgba(&self, out: &mut Vec<u8>) -> Option<(Duration, Duration)> {
         let t0 = Instant::now();
 
         let (cx, cy, cw0, ch0) = crop_geometry(self.top, self.child)?;
@@ -443,9 +444,9 @@ impl WgcCapture {
                 (cw, ch, *captured_at)
             };
 
-            let mut rgba = resize_to_display(&cropped, cw, ch)?;
-            rgba.chunks_exact_mut(4).for_each(|c| c.swap(0, 2)); // BGRA -> RGBA
-            Some((rgba, captured_at.elapsed(), t0.elapsed()))
+            resize_to_display_into(&cropped, cw, ch, out)?;
+            out.as_chunks_mut::<4>().0.iter_mut().for_each(|c| c.swap(0, 2)); // BGRA -> RGBA
+            Some((captured_at.elapsed(), t0.elapsed()))
         })
     }
 }
@@ -484,27 +485,29 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     // Stale doesn't mean dead: a static overlay (the GPG user center webview AccountManager drives)
     // stops composing too, so the last frame is still the current screen while the window lives.
     let t0 = Instant::now();
-    let frame = cap.and_then(|c| c.latest_display_rgba()).filter(|(_, age, _)| {
+    let mut rgba = FRAME_OUT.take();
+    let timings = cap.and_then(|c| c.latest_display_rgba(&mut rgba)).filter(|(age, _)| {
         *age < FRAME_STALE || (*age < FRAME_REUSE_LIMIT && cap.is_some_and(|c| unsafe { IsWindow(Some(c.child)).as_bool() }))
     });
-    let reused = frame.as_ref().is_some_and(|(_, age, _)| *age >= FRAME_STALE);
+    let reused = timings.is_some_and(|(age, _)| age >= FRAME_STALE);
 
     // port == 0 is the byte-return verb (fake nemu DLL): hand the RGBA frame to the caller instead of MAA's nc port.
     // Response: [w: u32 LE][h: u32 LE][rgba...]; no fresh frame degrades to a black frame in the same format.
     let extras = maa_port == 0;
     let (verb, cost) = if extras { ("extras", "ipc_write") } else { ("rawbync", "transmit") };
 
-    let (rgba, timings) = match frame {
-        Some((rgba, frame_age, crop_resize)) => (rgba, Some((frame_age, crop_resize))),
-        None => (black_frame_pixels(), None),
-    };
+    if timings.is_none() {
+        rgba.clear();
+        rgba.resize(DISPLAY_FRAME_BYTES, 0);
+    }
 
     let t1 = Instant::now();
     if extras {
         write_extras_frame(&mut stream, &rgba);
     } else {
-        transmit_pixels_nc(rgba, maa_port);
+        transmit_pixels_nc(&mut rgba, maa_port);
     }
+    FRAME_OUT.set(rgba);
 
     match timings {
         Some((frame_age, crop_resize)) => debug_log(

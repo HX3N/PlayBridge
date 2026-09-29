@@ -5,7 +5,7 @@ use std::{
 };
 
 use win_screenshot::prelude::*;
-use windows::core::PCWSTR;
+use windows::core::{w, PCWSTR};
 use windows::Win32::{
     Foundation::{HWND, RECT},
     UI::WindowsAndMessaging::{
@@ -18,7 +18,7 @@ use crate::sys::config::{config, set_client, Client};
 use crate::sys::logging::{debug_log, LogLevel, LogMode};
 use crate::sys::notification::{display_notification, Notification};
 
-const CROSVM_CLASS: &str = "CROSVM_1";
+const CROSVM_CLASS: PCWSTR = w!("CROSVM_1");
 
 const WINDOW_RESTORE_DELAY_MS: u64 = 300;
 
@@ -128,17 +128,11 @@ fn adopt_running_client(client: Client) {
 }
 
 fn resolve_client_by_title(title: &str) -> Option<Client> {
-    [Client::KR, Client::JP, Client::EN].into_iter().find(|&client| title.starts_with(client.title()))
+    Client::SUPPORTED.into_iter().find(|&client| title.starts_with(client.title()))
 }
 
 fn find_crosvm_child(parent_hwnd: HWND) -> Option<HWND> {
-    let crosvm_class_wide: Vec<u16> = CROSVM_CLASS.encode_utf16().chain(Some(0)).collect();
-
-    unsafe {
-        FindWindowExW(Some(parent_hwnd), None, PCWSTR(crosvm_class_wide.as_ptr()), None)
-            .ok()
-            .filter(|h| !h.0.is_null())
-    }
+    unsafe { FindWindowExW(Some(parent_hwnd), None, CROSVM_CLASS, None).ok().filter(|h| !h.0.is_null()) }
 }
 
 pub(crate) fn get_window_class(hwnd: HWND) -> Option<String> {

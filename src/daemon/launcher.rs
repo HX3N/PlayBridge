@@ -32,7 +32,7 @@ const LAUNCH_RETRY_COOLDOWN: Duration = Duration::from_secs(10);
 fn adopt_installed_client() -> Option<crate::sys::store::AppRecord> {
     let previous = config().client;
 
-    let mut installed = [Client::KR, Client::JP, Client::EN]
+    let mut installed = Client::SUPPORTED
         .into_iter()
         .filter(|&client| client != previous)
         .filter_map(|client| crate::sys::store::app_record(client.package()).map(|record| (client, record)));
@@ -158,19 +158,19 @@ pub fn run_launcher_daemon() {
 }
 
 fn resolve_client(package: &str) -> Option<Client> {
-    [Client::KR, Client::JP, Client::EN]
-        .into_iter()
-        .find(|&client| package.starts_with(client.package()))
+    Client::SUPPORTED.into_iter().find(|&client| package.starts_with(client.package()))
 }
 
 fn is_loading_screen_active() -> bool {
-    window_list().unwrap_or_default().into_iter().any(|i| {
-        if i.window_name == LOADING_TITLE {
-            let hwnd = HWND(i.hwnd as usize as *mut c_void);
-            if let Some(class_name) = get_window_class(hwnd) {
-                return class_name.starts_with(WRAPPER_CLASS);
-            }
-        }
-        false
-    })
+    !loading_screen_windows().is_empty()
+}
+
+pub(crate) fn loading_screen_windows() -> Vec<HWND> {
+    window_list()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|i| i.window_name == LOADING_TITLE)
+        .map(|i| HWND(i.hwnd as usize as *mut c_void))
+        .filter(|&hwnd| get_window_class(hwnd).is_some_and(|class_name| class_name.starts_with(WRAPPER_CLASS)))
+        .collect()
 }

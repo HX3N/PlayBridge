@@ -15,6 +15,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use winreg::enums::HKEY_CURRENT_USER;
+use winreg::types::FromRegValue;
 use winreg::RegKey;
 
 mod shared;
@@ -38,12 +39,7 @@ const FRAME_RETRY_DELAY_MS: u64 = 16;
 // Ceiling on a frame announced by the daemon, so a corrupt header cannot drive a huge allocation.
 const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 
-fn reg_read_dword(key: &str) -> Option<u32> {
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    hkcu.open_subkey(REG_PATH_STATE).ok()?.get_value(key).ok()
-}
-
-fn reg_read_string(key: &str) -> Option<String> {
+fn reg_read<T: FromRegValue>(key: &str) -> Option<T> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     hkcu.open_subkey(REG_PATH_STATE).ok()?.get_value(key).ok()
 }
@@ -57,7 +53,7 @@ fn connect_daemon() -> Option<TcpStream> {
         CACHED_PORT.store(0, Ordering::Relaxed);
     }
 
-    let port = reg_read_dword(KEY_DAEMON_PORT)?;
+    let port = reg_read::<u32>(KEY_DAEMON_PORT)?;
     if port == 0 {
         return None;
     }
@@ -77,7 +73,7 @@ fn ensure_daemon() {
     if connect_daemon().is_some() {
         return;
     }
-    if let Some(exe) = reg_read_string(KEY_EXE_PATH) {
+    if let Some(exe) = reg_read::<String>(KEY_EXE_PATH) {
         spawn_daemon(&exe);
     }
 }
