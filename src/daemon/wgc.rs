@@ -445,7 +445,7 @@ impl WgcCapture {
             };
 
             resize_to_display_into(&cropped, cw, ch, out)?;
-            out.chunks_exact_mut(4).for_each(|c| c.swap(0, 2)); // BGRA -> RGBA
+            out.as_chunks_mut::<4>().0.iter_mut().for_each(|c| c.swap(0, 2)); // BGRA -> RGBA
             Some((captured_at.elapsed(), t0.elapsed()))
         })
     }
