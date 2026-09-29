@@ -128,7 +128,7 @@ fn adopt_running_client(client: Client) {
 }
 
 fn resolve_client_by_title(title: &str) -> Option<Client> {
-    [Client::KR, Client::JP, Client::EN].into_iter().find(|&client| title.starts_with(client.title()))
+    Client::SUPPORTED.into_iter().find(|&client| title.starts_with(client.title()))
 }
 
 fn find_crosvm_child(parent_hwnd: HWND) -> Option<HWND> {

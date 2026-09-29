@@ -29,6 +29,8 @@ pub enum Client {
 }
 
 impl Client {
+    pub const SUPPORTED: [Client; 3] = [Client::KR, Client::JP, Client::EN];
+
     pub fn from_str(s: &str) -> Self {
         match s {
             "YoStarKR" => Client::KR,

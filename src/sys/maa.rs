@@ -67,8 +67,8 @@ pub fn parent_pid() -> Option<u32> {
     parent
 }
 
-/// False once the MAA that ran `devices` is gone. Unknown or unreadable PIDs report true, so a
-/// failed lookup never ends a daemon on its own.
+/// False once the MAA that ran `devices` is gone. With no PID published it reports true;
+/// a published PID that cannot be opened counts as gone.
 pub fn is_alive() -> bool {
     let pid: u32 = get_registry(KEY_MAA_PID, 0u32, REG_PATH_STATE);
     if pid == 0 {

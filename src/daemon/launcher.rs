@@ -32,7 +32,7 @@ const LAUNCH_RETRY_COOLDOWN: Duration = Duration::from_secs(10);
 fn adopt_installed_client() -> Option<crate::sys::store::AppRecord> {
     let previous = config().client;
 
-    let mut installed = [Client::KR, Client::JP, Client::EN]
+    let mut installed = Client::SUPPORTED
         .into_iter()
         .filter(|&client| client != previous)
         .filter_map(|client| crate::sys::store::app_record(client.package()).map(|record| (client, record)));
@@ -158,9 +158,7 @@ pub fn run_launcher_daemon() {
 }
 
 fn resolve_client(package: &str) -> Option<Client> {
-    [Client::KR, Client::JP, Client::EN]
-        .into_iter()
-        .find(|&client| package.starts_with(client.package()))
+    Client::SUPPORTED.into_iter().find(|&client| package.starts_with(client.package()))
 }
 
 fn is_loading_screen_active() -> bool {
