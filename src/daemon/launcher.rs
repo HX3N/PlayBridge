@@ -164,13 +164,15 @@ fn resolve_client(package: &str) -> Option<Client> {
 }
 
 fn is_loading_screen_active() -> bool {
-    window_list().unwrap_or_default().into_iter().any(|i| {
-        if i.window_name == LOADING_TITLE {
-            let hwnd = HWND(i.hwnd as usize as *mut c_void);
-            if let Some(class_name) = get_window_class(hwnd) {
-                return class_name.starts_with(WRAPPER_CLASS);
-            }
-        }
-        false
-    })
+    !loading_screen_windows().is_empty()
+}
+
+pub(crate) fn loading_screen_windows() -> Vec<HWND> {
+    window_list()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|i| i.window_name == LOADING_TITLE)
+        .map(|i| HWND(i.hwnd as usize as *mut c_void))
+        .filter(|&hwnd| get_window_class(hwnd).is_some_and(|class_name| class_name.starts_with(WRAPPER_CLASS)))
+        .collect()
 }
