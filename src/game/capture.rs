@@ -24,8 +24,10 @@ use crate::sys::notification::{display_notification, Notification};
 const LOOPBACK_IP: &str = "127.0.0.1";
 const TCP_TIMEOUT_MS: u64 = 100;
 
+pub const DISPLAY_FRAME_BYTES: usize = (DISPLAY_WIDTH * DISPLAY_HEIGHT * 4) as usize;
+
 pub fn send_black_frame_nc(port: u16) {
-    transmit_pixels_nc(black_frame_pixels(), port);
+    transmit_pixels_nc(&mut black_frame_pixels(), port);
 }
 
 pub fn screenshot(window: &GameWindow) {
@@ -99,20 +101,25 @@ thread_local! {
 }
 
 pub fn resize_to_display(pixels: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    resize_to_display_into(pixels, w, h, &mut out)?;
+    Some(out)
+}
+
+pub fn resize_to_display_into(pixels: &[u8], w: u32, h: u32, out: &mut Vec<u8>) -> Option<()> {
     let src_image = ImageRef::new(w, h, pixels, PixelType::U8x4).ok()?;
-    let mut dst_image = Image::new(DISPLAY_WIDTH, DISPLAY_HEIGHT, PixelType::U8x4);
+    out.resize(DISPLAY_FRAME_BYTES, 0);
+    let mut dst_image = Image::from_slice_u8(DISPLAY_WIDTH, DISPLAY_HEIGHT, out, PixelType::U8x4).ok()?;
 
     let options = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(fast_image_resize::FilterType::Lanczos3));
-    RESIZER.with(|r| r.borrow_mut().resize(&src_image, &mut dst_image, &options)).ok()?;
-
-    Some(dst_image.into_vec())
+    RESIZER.with(|r| r.borrow_mut().resize(&src_image, &mut dst_image, &options)).ok()
 }
 
 pub fn black_frame_pixels() -> Vec<u8> {
-    vec![0u8; (DISPLAY_WIDTH * DISPLAY_HEIGHT * 4) as usize]
+    vec![0u8; DISPLAY_FRAME_BYTES]
 }
 
-pub fn transmit_pixels_nc(mut pixels: Vec<u8>, port: u16) {
+pub fn transmit_pixels_nc(pixels: &mut [u8], port: u16) {
     let mut stream = match TcpStream::connect((LOOPBACK_IP, port)) {
         Ok(s) => s,
         Err(e) => {
@@ -132,7 +139,7 @@ pub fn transmit_pixels_nc(mut pixels: Vec<u8>, port: u16) {
     header[4..8].copy_from_slice(&DISPLAY_HEIGHT.to_le_bytes());
     header[8..12].copy_from_slice(&1u32.to_le_bytes());
 
-    if let Err(e) = stream.write_all(&header).and_then(|()| stream.write_all(&pixels)) {
+    if let Err(e) = stream.write_all(&header).and_then(|()| stream.write_all(pixels)) {
         debug_log(LogLevel::Error, LogMode::Plain, &format!("Socket: send failed: {}", e));
         return;
     }
