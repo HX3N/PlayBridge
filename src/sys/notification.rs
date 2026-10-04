@@ -33,6 +33,7 @@ pub enum Notification {
     UnsupportedClient(String),
     ClientMismatch(String, String),
     GameNotInstalled(String),
+    GameLaunchStalled,
     AdbInputUnsupported,
     InputHeld,
 }
@@ -46,6 +47,7 @@ impl Notification {
             | Self::UnsupportedClient(..)
             | Self::ClientMismatch(..)
             | Self::GameNotInstalled(..)
+            | Self::GameLaunchStalled
             | Self::AdbInputUnsupported
             | Self::InputHeld => LogLevel::Warn,
 
@@ -110,6 +112,10 @@ impl Notification {
             Self::GameNotInstalled(p) => (
                 format!("The game is not installed in Google Play Games\nPackage: {}", p),
                 format!("Google Play Games에 게임이 설치돼 있지 않아요\n패키지: {}", p),
+            ),
+            Self::GameLaunchStalled => (
+                "The game did not start\nPlease restart Google Play Games".into(),
+                "게임이 시작되지 않았어요\nGoogle Play Games를 재시작해주세요".into(),
             ),
             Self::AdbInputUnsupported => (
                 "ADB Input is not supported\nPlease switch to Minitouch".into(),

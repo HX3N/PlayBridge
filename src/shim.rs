@@ -1,9 +1,6 @@
 //! The one-shot side of the bin: what MAA gets when it calls us like `adb`.
 
-use windows::Win32::Foundation::{LPARAM, WPARAM};
-use windows::Win32::UI::WindowsAndMessaging::WM_CLOSE;
-
-use crate::daemon::launcher::{apply_intent_package, ensure_launcher, loading_screen_windows};
+use crate::daemon::launcher::{apply_intent_package, ensure_launcher};
 use crate::daemon::wgc;
 use crate::game::capture;
 use crate::game::input;
@@ -148,15 +145,7 @@ pub fn execute_command(command: Command) {
             if let Some(w) = window {
                 input::terminate(&w);
             } else {
-                let loading = loading_screen_windows();
-                if loading.is_empty() {
-                    debug_log(LogLevel::Warn, LogMode::Plain, "ForceStop: window not found");
-                } else {
-                    for &hwnd in &loading {
-                        input::post_message(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
-                    }
-                    debug_log(LogLevel::Info, LogMode::Plain, &format!("ForceStop: close sent to {} loading window(s)", loading.len()));
-                }
+                debug_log(LogLevel::Warn, LogMode::Plain, "ForceStop: window not found");
             }
             debug_log(LogLevel::Info, LogMode::Plain, "ForceStop: shutdown requested");
             display_notification(Notification::GpgShutdown);

@@ -26,7 +26,8 @@ pub const LAUNCHER_MUTEX: &str = "Local\\PlayBridgeLauncher";
 // capture request gets to start a fresh launcher rather than this one retrying forever.
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(180);
 const LAUNCH_POLL: Duration = Duration::from_millis(500);
-const LAUNCH_RETRY_COOLDOWN: Duration = Duration::from_secs(10);
+const LAUNCH_RETRY_COOLDOWN: Duration = Duration::from_secs(45);
+const MAX_LAUNCH_ATTEMPTS: u32 = 3;
 
 /// Two clients installed side by side is assumed not to happen, and is not guessed at.
 fn adopt_installed_client() -> Option<crate::sys::store::AppRecord> {
@@ -121,6 +122,7 @@ pub fn run_launcher_daemon() {
     let mut last_launch: Option<Instant> = None;
     let mut was_loading = false;
     let mut attempts = 0;
+    let mut stalled = false;
 
     while started.elapsed() < LAUNCH_TIMEOUT {
         // Detached from MAA, so nothing else would end it.
@@ -134,21 +136,22 @@ pub fn run_launcher_daemon() {
             return;
         }
 
-        if is_loading_screen_active() {
-            was_loading = true;
-        } else {
-            // The loading screen going away without the game appearing means the launch died partway.
-            if was_loading {
-                debug_log(LogLevel::Warn, LogMode::Plain, "Launcher: loading screen gone without the game, retrying");
-                was_loading = false;
-                last_launch = None;
-            }
-            if last_launch.is_none_or(|t| t.elapsed() >= LAUNCH_RETRY_COOLDOWN) {
-                last_launch = Some(Instant::now());
-                attempts += 1;
-                debug_log(LogLevel::Info, LogMode::Plain, &format!("Launcher: launch attempt {}", attempts));
-                let _ = open::that(format!("googleplaygames://launch/?id={}&pid=1", package));
-            }
+        let loading = is_loading_screen_active();
+        if was_loading && !loading {
+            debug_log(LogLevel::Info, LogMode::Plain, "Launcher: Google Play Games window no longer visible");
+        }
+        was_loading = loading;
+
+        let due = last_launch.is_none_or(|t| t.elapsed() >= LAUNCH_RETRY_COOLDOWN);
+        if due && attempts < MAX_LAUNCH_ATTEMPTS {
+            last_launch = Some(Instant::now());
+            attempts += 1;
+            debug_log(LogLevel::Info, LogMode::Plain, &format!("Launcher: launch attempt {}", attempts));
+            let _ = open::that(format!("googleplaygames://launch/?id={}&pid=1", package));
+        } else if due && !stalled {
+            stalled = true;
+            debug_log(LogLevel::Warn, LogMode::Plain, &format!("Launcher: no game after {} attempts, stopped launching", attempts));
+            display_notification(Notification::GameLaunchStalled);
         }
 
         thread::sleep(LAUNCH_POLL);
@@ -162,15 +165,8 @@ fn resolve_client(package: &str) -> Option<Client> {
 }
 
 fn is_loading_screen_active() -> bool {
-    !loading_screen_windows().is_empty()
-}
-
-pub(crate) fn loading_screen_windows() -> Vec<HWND> {
-    window_list()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|i| i.window_name == LOADING_TITLE)
-        .map(|i| HWND(i.hwnd as usize as *mut c_void))
-        .filter(|&hwnd| get_window_class(hwnd).is_some_and(|class_name| class_name.starts_with(WRAPPER_CLASS)))
-        .collect()
+    window_list().unwrap_or_default().into_iter().any(|i| {
+        i.window_name == LOADING_TITLE
+            && get_window_class(HWND(i.hwnd as usize as *mut c_void)).is_some_and(|class_name| class_name.starts_with(WRAPPER_CLASS))
+    })
 }

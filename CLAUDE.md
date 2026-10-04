@@ -99,8 +99,8 @@ HwndWrapper[DefaultDomain;;<guid>]   top-level, crosvm.exe, titled "<game name> 
 (`명일방주` / `アークナイツ` / `Arknights`) **and** the window must own a direct `CROSVM_1` child. The prefix keeps a GPG
 session running another game away from MAA and identifies the client in the same step; the child check rejects GPG's
 chrome. GPG also keeps four invisible 12x12 untitled top-levels with their own `CROSVM_1`, which the visible/titled
-filter drops. The launch/loading window is titled exactly `Google Play Games` with an `HwndWrapper*` class; force-stop
-posts `WM_CLOSE` to those when no game window exists.
+filter drops. The window titled exactly `Google Play Games` with an `HwndWrapper*` class is GPG's own main window
+(`Service.exe`), not a per-launch splash: its visibility says nothing about whether a launch is progressing.
 
 WGC captures the **top-level** window and crops to the `CROSVM_1` client area per request.
 
@@ -157,8 +157,9 @@ MAA's next `am start` intent contradict it, which raises the mismatch on its own
 Launching is its own short-lived process whose lifetime *is* the "game is starting" signal. Without a `store.db`
 record the launch URI only raises GPG's own window (endless loading), so a miss with no other client to adopt becomes
 `GameNotInstalled`. It fires
-`googleplaygames://launch/?id=<package>&pid=1`, never while a loading window is up; with neither loading nor game
-window it retries every 10 s, and a loading window that vanishes without the game resets that cooldown. Only
+`googleplaygames://launch/?id=<package>&pid=1` at once and then on a fixed 45 s schedule (longer than a healthy cold
+start), at most 3 times whatever GPG's main window does; 45 s after the last one it raises `GameLaunchStalled` once
+and only waits out its 180 s, holding the mutex so a frameless capture cannot start another launcher. Only
 `devices`, `am start`, and a capture request that finds no frame start it, so closing GPG after MAA finishes does not
 bring it back. `store.db` (SQLite, protobuf BLOB) is read raw with a shared read while GPG runs; the layout is in
 `sys/store.rs`. Its current render resolution is checked on every bind and warned about (non-16:9, or 16:9 but not 1280x720) when it
