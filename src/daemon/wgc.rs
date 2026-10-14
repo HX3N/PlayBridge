@@ -4,6 +4,7 @@
 // and no request pays for a synchronous PrintWindow readback.
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::windows::process::CommandExt;
@@ -11,8 +12,6 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
-
-type FrameLatest = Arc<Mutex<Option<(Vec<u8>, u32, u32, Instant)>>>;
 
 use windows::core::{IInspectable, Interface};
 use windows::Foundation::TypedEventHandler;
@@ -22,8 +21,9 @@ use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Win32::Foundation::{HMODULE, HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-    D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D, D3D11_CPU_ACCESS_READ,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_STAGING,
 };
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT,
@@ -47,11 +47,40 @@ use crate::sys::logging::{debug_log, LogLevel, LogMode};
 use crate::sys::notification::{display_notification, Notification};
 use crate::sys::process::already_running;
 
+struct PassedFrame {
+    buf: Vec<u8>,
+    w: u32,
+    h: u32,
+    hash: u64,
+    passed_at: Instant,
+}
+
+// `arrived_at` moves for every processed frame (liveness); `frame.passed_at` only for frames that passed the filter (freshness).
+#[derive(Default)]
+struct Latest {
+    frame: Option<PassedFrame>,
+    arrived_at: Option<Instant>,
+    held: u32,
+    suspects_added: u32,
+}
+
+type FrameLatest = Arc<Mutex<Latest>>;
+
+struct Delivery {
+    age: Duration,
+    crop_resize: Duration,
+    hash: u64,
+    held: u32,
+    suspects_added: u32,
+}
+
 pub const DAEMON_MUTEX: &str = "Local\\PlayBridgeWgcDaemon";
 // MAA's lifetime ends the daemon; idling only drops capture to low power.
 const LOW_POWER_AFTER: Duration = Duration::from_secs(15);
 // Stays under FRAME_STALE so the first request after idling still gets a frame that counts as fresh.
 const LOW_POWER_INTERVAL: Duration = Duration::from_millis(500);
+// A single sample per interval can lock onto GPG's stale slot (its cycle is 3 frames), so each interval takes a burst.
+const LOW_POWER_BURST: u32 = 3;
 const MAA_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 // How often the daemon normalizes the GPG window (restore/resize/rebind), independent of request rate.
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(50);
@@ -59,6 +88,10 @@ const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(50);
 const FRAME_STALE: Duration = Duration::from_secs(1);
 // Upper bound on reusing a stale frame, for when the window is gone but its HWND lingers past IsWindow.
 const FRAME_REUSE_LIMIT: Duration = Duration::from_secs(30);
+const FILTER_WARMUP_FRAMES: u32 = 3;
+const FILTER_RECENT_FRAMES: usize = 12;
+const FILTER_MAX_SUSPECTS: usize = 16;
+const FILTER_STUCK_AFTER: Duration = Duration::from_secs(1);
 const IPC_CONNECT_TIMEOUT_MS: u64 = 500;
 // Client must wait out the full frame delivery before the ack (matches `nc -w 3`).
 const IPC_ACK_TIMEOUT_MS: u64 = 3000;
@@ -131,7 +164,13 @@ fn create_device() -> windows::core::Result<(ID3D11Device, ID3D11DeviceContext)>
         )?;
     }
 
-    Ok((device.unwrap(), context.unwrap()))
+    let context = context.unwrap();
+    let multithread: ID3D11Multithread = context.cast()?;
+    unsafe {
+        let _ = multithread.SetMultithreadProtected(true);
+    }
+
+    Ok((device.unwrap(), context))
 }
 
 fn to_winrt_device(d3d: &ID3D11Device) -> windows::core::Result<windows::Graphics::DirectX::Direct3D11::IDirect3DDevice> {
@@ -147,16 +186,114 @@ fn create_item(hwnd: HWND) -> windows::core::Result<GraphicsCaptureItem> {
 
 // Arknights animates nonstop, so frames keep arriving with nobody asking for them. Dropping them
 // here is what makes idling cheap: the GPU->CPU copy is the whole cost of a frame.
-fn skip_frame(last_processed: &Mutex<Instant>) -> bool {
+fn admit_frame(pacing: &Mutex<LowPowerPacing>) -> Option<bool> {
+    let mut pacing = pacing.lock().unwrap();
     if !LOW_POWER.load(Ordering::Relaxed) {
-        return false;
+        pacing.burst_left = 0;
+        return Some(false);
     }
-    let mut last = last_processed.lock().unwrap();
-    if last.elapsed() < LOW_POWER_INTERVAL {
-        return true;
+    if pacing.burst_left > 0 {
+        pacing.burst_left -= 1;
+        return Some(false);
     }
-    *last = Instant::now();
-    false
+    if pacing.last_burst.elapsed() < LOW_POWER_INTERVAL {
+        return None;
+    }
+    pacing.last_burst = Instant::now();
+    pacing.burst_left = LOW_POWER_BURST - 1;
+    Some(true)
+}
+
+struct LowPowerPacing {
+    last_burst: Instant,
+    burst_left: u32,
+}
+
+fn sample_hash(bgra: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for px in bgra.as_chunks::<4>().0.iter().step_by(7) {
+        h = (h ^ u32::from_ne_bytes(*px) as u64).wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+// GPG occasionally re-emits an old frame among live ones, so a hash repeating in recent history is treated as stale.
+struct StaleFilter {
+    prev_raw: Option<u64>,
+    delivered: Option<u64>,
+    recent: VecDeque<u64>,
+    suspects: VecDeque<u64>,
+    seen: u32,
+    stuck_since: Instant,
+    last_arrival: Instant,
+}
+
+impl Default for StaleFilter {
+    fn default() -> Self {
+        let now = Instant::now();
+        Self {
+            prev_raw: None,
+            delivered: None,
+            recent: VecDeque::new(),
+            suspects: VecDeque::new(),
+            seen: 0,
+            stuck_since: now,
+            last_arrival: now,
+        }
+    }
+}
+
+impl StaleFilter {
+    fn clear_if_stuck(&mut self) -> bool {
+        let now = Instant::now();
+        // A gap in arrivals means composition stalled, not that the filter is stuck, so it restarts the clock.
+        if now.duration_since(self.last_arrival) > FILTER_STUCK_AFTER {
+            self.stuck_since = now;
+        }
+        self.last_arrival = now;
+        if now.duration_since(self.stuck_since) <= FILTER_STUCK_AFTER {
+            return false;
+        }
+        self.recent.clear();
+        self.suspects.clear();
+        self.stuck_since = now;
+        true
+    }
+
+    fn judge(&mut self, h: u64) -> (bool, bool) {
+        let warming = self.seen < FILTER_WARMUP_FRAMES;
+        self.seen = self.seen.saturating_add(1);
+
+        let mut added = false;
+        let pass = if warming {
+            false
+        } else if Some(h) == self.prev_raw || Some(h) == self.delivered {
+            true
+        } else if self.suspects.contains(&h) {
+            false
+        } else {
+            let seen_recently = self.recent.iter().filter(|&&r| r == h).count();
+            if seen_recently >= 2 {
+                if self.suspects.len() >= FILTER_MAX_SUSPECTS {
+                    self.suspects.pop_front();
+                }
+                self.suspects.push_back(h);
+                added = true;
+            }
+            seen_recently == 0
+        };
+
+        if self.recent.len() >= FILTER_RECENT_FRAMES {
+            self.recent.pop_front();
+        }
+        self.recent.push_back(h);
+        self.prev_raw = Some(h);
+        if pass {
+            self.delivered = Some(h);
+            self.stuck_since = Instant::now();
+        }
+        (pass, added)
+    }
 }
 
 // Avoids a driver allocation and an ~8MB heap alloc on every captured frame.
@@ -164,6 +301,7 @@ fn skip_frame(last_processed: &Mutex<Instant>) -> bool {
 struct FrameWork {
     staging: Option<ID3D11Texture2D>,
     scratch: Vec<u8>,
+    filter: StaleFilter,
 }
 
 fn create_staging(device: &ID3D11Device, desc: &D3D11_TEXTURE2D_DESC) -> windows::core::Result<ID3D11Texture2D> {
@@ -386,23 +524,42 @@ impl WgcCapture {
         let size = item.Size()?;
         let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(&winrt_device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size)?;
 
-        let latest: FrameLatest = Arc::new(Mutex::new(None));
+        let latest: FrameLatest = Arc::new(Mutex::new(Latest::default()));
         {
             let latest = latest.clone();
             let device = device.clone();
             let context = context.clone();
             let work = Arc::new(Mutex::new(FrameWork::default()));
-            let last_processed = Arc::new(Mutex::new(Instant::now()));
+            let pacing = Arc::new(Mutex::new(LowPowerPacing { last_burst: Instant::now(), burst_left: 0 }));
             let handler = TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(move |sender, _| {
                 let sender = sender.ok()?;
                 if let Ok(frame) = sender.TryGetNextFrame() {
-                    if !skip_frame(&last_processed) {
+                    if let Some(burst_start) = admit_frame(&pacing) {
                         let mut work = work.lock().unwrap();
-                        let FrameWork { staging, scratch } = &mut *work;
+                        let FrameWork { staging, scratch, filter } = &mut *work;
+                        if burst_start {
+                            filter.prev_raw = None;
+                        }
                         if let Ok((w, h)) = process_frame(&device, &context, staging, scratch, &frame) {
-                            let filled = std::mem::take(scratch);
-                            let prev = latest.lock().unwrap().replace((filled, w, h, Instant::now()));
-                            *scratch = prev.map(|(buf, ..)| buf).unwrap_or_default();
+                            if filter.clear_if_stuck() {
+                                debug_log(LogLevel::Warn, LogMode::Plain, "Wgc: no frame passed the stale filter for 1 s, history cleared");
+                            }
+                            let hash = sample_hash(scratch);
+                            let (pass, suspect_added) = filter.judge(hash);
+                            if suspect_added {
+                                debug_log(LogLevel::Info, LogMode::Plain, &format!("Wgc: stale-frame suspect {:016x}", hash));
+                            }
+                            let now = Instant::now();
+                            let mut latest = latest.lock().unwrap();
+                            latest.arrived_at = Some(now);
+                            latest.suspects_added += suspect_added as u32;
+                            if pass {
+                                let filled = std::mem::take(scratch);
+                                let prev = latest.frame.replace(PassedFrame { buf: filled, w, h, hash, passed_at: now });
+                                *scratch = prev.map(|f| f.buf).unwrap_or_default();
+                            } else {
+                                latest.held += 1;
+                            }
                         }
                     }
                     let _ = frame.Close();
@@ -425,11 +582,12 @@ impl WgcCapture {
 
     /// Grows once WGC stops delivering, which is the daemon's liveness signal for the window.
     pub fn latest_frame_age(&self) -> Option<Duration> {
-        self.latest.lock().unwrap().as_ref().map(|(_, _, _, captured_at)| captured_at.elapsed())
+        self.latest.lock().unwrap().arrived_at.map(|arrived_at| arrived_at.elapsed())
     }
 
-    /// Fills `out` with the RGBA frame and returns its age and the crop+resize cost.
-    pub fn latest_display_rgba(&self, out: &mut Vec<u8>) -> Option<(Duration, Duration)> {
+    /// Fills `out` with the last passed RGBA frame and returns its age, hash, crop+resize cost,
+    /// and the filter counters since the previous call (which this resets).
+    fn latest_display_rgba(&self, out: &mut Vec<u8>) -> Option<Delivery> {
         let t0 = Instant::now();
 
         let (cx, cy, cw0, ch0) = crop_geometry(self.top, self.child)?;
@@ -437,16 +595,17 @@ impl WgcCapture {
         CROP_BUF.with(|buf| {
             let mut cropped = buf.borrow_mut();
 
-            let (cw, ch, captured_at) = {
-                let guard = self.latest.lock().unwrap();
-                let (bgra, fw, fh, captured_at) = guard.as_ref()?;
-                let (cw, ch) = crop_region(bgra, *fw, *fh, (cx, cy, cw0, ch0), &mut cropped)?;
-                (cw, ch, *captured_at)
+            let (cw, ch, passed_at, hash, held, suspects_added) = {
+                let mut guard = self.latest.lock().unwrap();
+                let f = guard.frame.as_ref()?;
+                let (cw, ch) = crop_region(&f.buf, f.w, f.h, (cx, cy, cw0, ch0), &mut cropped)?;
+                let (passed_at, hash) = (f.passed_at, f.hash);
+                (cw, ch, passed_at, hash, std::mem::take(&mut guard.held), std::mem::take(&mut guard.suspects_added))
             };
 
             resize_to_display_into(&cropped, cw, ch, out)?;
             out.as_chunks_mut::<4>().0.iter_mut().for_each(|c| c.swap(0, 2)); // BGRA -> RGBA
-            Some((captured_at.elapsed(), t0.elapsed()))
+            Some(Delivery { age: passed_at.elapsed(), crop_resize: t0.elapsed(), hash, held, suspects_added })
         })
     }
 }
@@ -486,17 +645,17 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     // stops composing too, so the last frame is still the current screen while the window lives.
     let t0 = Instant::now();
     let mut rgba = FRAME_OUT.take();
-    let timings = cap.and_then(|c| c.latest_display_rgba(&mut rgba)).filter(|(age, _)| {
-        *age < FRAME_STALE || (*age < FRAME_REUSE_LIMIT && cap.is_some_and(|c| unsafe { IsWindow(Some(c.child)).as_bool() }))
+    let delivery = cap.and_then(|c| c.latest_display_rgba(&mut rgba)).filter(|d| {
+        d.age < FRAME_STALE || (d.age < FRAME_REUSE_LIMIT && cap.is_some_and(|c| unsafe { IsWindow(Some(c.child)).as_bool() }))
     });
-    let reused = timings.is_some_and(|(age, _)| age >= FRAME_STALE);
+    let reused = delivery.as_ref().is_some_and(|d| d.age >= FRAME_STALE);
 
     // port == 0 is the byte-return verb (fake nemu DLL): hand the RGBA frame to the caller instead of MAA's nc port.
     // Response: [w: u32 LE][h: u32 LE][rgba...]; no fresh frame degrades to a black frame in the same format.
     let extras = maa_port == 0;
     let (verb, cost) = if extras { ("extras", "ipc_write") } else { ("rawbync", "transmit") };
 
-    if timings.is_none() {
+    if delivery.is_none() {
         rgba.clear();
         rgba.resize(DISPLAY_FRAME_BYTES, 0);
     }
@@ -509,19 +668,22 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     }
     FRAME_OUT.set(rgba);
 
-    match timings {
-        Some((frame_age, crop_resize)) => debug_log(
+    match delivery {
+        Some(d) => debug_log(
             if reused { LogLevel::Warn } else { LogLevel::Info },
             LogMode::Plain,
             &format!(
-                "Wgc: {} {} in {} ms (age {} ms, crop+resize {} ms, {} {} ms)",
+                "Wgc: {} {} in {} ms (age {} ms, crop+resize {} ms, {} {} ms, hash {:016x}, held {}, suspects +{})",
                 verb,
                 if reused { "stale frame reused" } else { "delivered" },
                 t0.elapsed().as_millis(),
-                frame_age.as_millis(),
-                crop_resize.as_millis(),
+                d.age.as_millis(),
+                d.crop_resize.as_millis(),
                 cost,
-                t1.elapsed().as_millis()
+                t1.elapsed().as_millis(),
+                d.hash,
+                d.held,
+                d.suspects_added
             ),
         ),
         None => {

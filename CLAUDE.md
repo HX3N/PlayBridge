@@ -109,11 +109,15 @@ WGC captures the **top-level** window and crops to the `CROSVM_1` client area pe
 **Frames.** WGC keeps compositing occluded windows but stops on a genuine minimize (hence parking). Arknights
 animates constantly, so a frame older than 1 s means composition stopped — but a static GPG overlay (user-center
 webview) stalls WGC while the last frame is still the true screen, so stale frames are served for up to 30 s while the
-child window lives, then black. DWM leaves the right/bottom ~3 px transparent: the crop keeps full size and pads by
+child window lives, then black. GPG also re-emits an old frame among live ones, so each frame's sampled hash is judged:
+equal to the previous or last delivered frame passes (a still screen is not stale), any other hash in the last 12 is
+held, and one that comes back a second time becomes a suspect held from then on; if nothing passes for 1 s the history is cleared. Window
+liveness counts every arriving frame, while the 1 s / 30 s age counts only frames that passed. DWM leaves the right/bottom ~3 px transparent: the crop keeps full size and pads by
 replicating edge pixels (clamping shifts the UI after resize). Win11 rounded corners are squared while capturing and
 restored on exit. The frame pool is fixed to the window size, so a resize needs a new session even on the same HWND;
-rebinds build on a worker so the old capture keeps serving. Idling never ends the daemon; it drops to a low-power
-frame rate instead of paying the GPU→CPU copy for every frame.
+rebinds build on a worker so the old capture keeps serving. Idling never ends the daemon; it drops to bursts of 3
+frames every 500 ms instead of paying the GPU→CPU copy for every frame (a single sample can lock onto GPG's stale slot,
+which cycles every 3 frames).
 
 **Input lock (minitouch).** User clicks share the queue MAA's posted touches go into, so a stray click tears a swipe.
 While a touch is in flight the top-level window is `EnableWindow(false)`: inherited by the child, and posted messages
@@ -184,6 +188,9 @@ acquired. A killed process strands the depth, so `main()` resets it when neither
   `PlayExtras\nx_device\…`, waiting while MAA holds them. Then check: connect, screencap mode chosen, tap/swipe,
   minimize (parking) with capture continuing, daemons exiting after MAA, and the log. `PlayBridgeADB.exe --touch-overlay` toggles
   per-touch PNGs under `debug\PlayBridge\` for checking coordinates.
+- Frame probe: with the game running, `cargo run --release --example wgc_probe -- [total_secs] [b_delay_secs]` records
+  the window with two WGC sessions and Desktop Duplication at once and flags frames that reappear; output goes to
+  `target\wgc_probe\<timestamp>\`.
 - **Release**: a push to `main` whose head commit message contains `[release]` (or a manual dispatch) builds and
   publishes a GitHub release with `PlayBridgeADB.exe`, `external_renderer_ipc.dll`, and `tools/Setup.bat`. Never put `[release]` in a commit message unless asked. The version (`vYYYY.MM.DD_HH.mm`,
   KST) is injected via `PLAYBRIDGE_VERSION`; local builds report `development` and skip the update check.
