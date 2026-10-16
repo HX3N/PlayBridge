@@ -21,9 +21,8 @@ use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Win32::Foundation::{HMODULE, HWND, POINT, RECT};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread, ID3D11Texture2D, D3D11_CPU_ACCESS_READ,
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_STAGING,
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+    D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
 };
 use windows::Win32::Graphics::Dwm::{
     DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT,
@@ -58,7 +57,7 @@ struct PassedFrame {
 // `arrived_at` moves for every processed frame (liveness); `frame.passed_at` only for frames that passed the filter (freshness).
 #[derive(Default)]
 struct Latest {
-    frame: Option<PassedFrame>,
+    frame: Option<Arc<PassedFrame>>,
     arrived_at: Option<Instant>,
     held: u32,
     suspects_added: u32,
@@ -84,11 +83,11 @@ const LOW_POWER_BURST: u32 = 3;
 const MAA_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 // How often the daemon normalizes the GPG window (restore/resize/rebind), independent of request rate.
 const MAINTENANCE_INTERVAL: Duration = Duration::from_millis(50);
+const RESIZE_SETTLE: Duration = Duration::from_millis(200);
 // Arknights animates continuously, so a frame older than this means the window stopped composing.
 const FRAME_STALE: Duration = Duration::from_secs(1);
 // Upper bound on reusing a stale frame, for when the window is gone but its HWND lingers past IsWindow.
 const FRAME_REUSE_LIMIT: Duration = Duration::from_secs(30);
-const FILTER_WARMUP_FRAMES: u32 = 3;
 const FILTER_RECENT_FRAMES: usize = 12;
 const FILTER_MAX_SUSPECTS: usize = 16;
 const FILTER_STUCK_AFTER: Duration = Duration::from_secs(1);
@@ -164,13 +163,8 @@ fn create_device() -> windows::core::Result<(ID3D11Device, ID3D11DeviceContext)>
         )?;
     }
 
-    let context = context.unwrap();
-    let multithread: ID3D11Multithread = context.cast()?;
-    unsafe {
-        let _ = multithread.SetMultithreadProtected(true);
-    }
-
-    Ok((device.unwrap(), context))
+    // The immediate context is used on the WGC callback thread only.
+    Ok((device.unwrap(), context.unwrap()))
 }
 
 fn to_winrt_device(d3d: &ID3D11Device) -> windows::core::Result<windows::Graphics::DirectX::Direct3D11::IDirect3DDevice> {
@@ -209,12 +203,22 @@ struct LowPowerPacing {
     burst_left: u32,
 }
 
-fn sample_hash(bgra: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for px in bgra.as_chunks::<4>().0.iter().step_by(7) {
-        h = (h ^ u32::from_ne_bytes(*px) as u64).wrapping_mul(0x100000001b3);
+// Hash a fixed spatial grid rather than one pixel in seven of the entire texture.
+fn sample_hash(bgra: &[u8], w: u32, h: u32) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    hash = (hash ^ ((w as u64) << 32 | h as u64)).wrapping_mul(0x100000001b3);
+    let (w, h) = (w as usize, h as usize);
+    let (cols, rows) = (w.min(96), h.min(54));
+    for y in 0..rows {
+        let sy = y * h.saturating_sub(1) / rows.saturating_sub(1).max(1);
+        for x in 0..cols {
+            let sx = x * w.saturating_sub(1) / cols.saturating_sub(1).max(1);
+            let i = (sy * w + sx) * 4;
+            let pixel = u32::from_ne_bytes(bgra[i..i + 4].try_into().unwrap());
+            hash = (hash ^ pixel as u64).wrapping_mul(0x100000001b3);
+        }
     }
-    h
+    hash
 }
 
 // GPG occasionally re-emits an old frame among live ones, so a hash repeating in recent history is treated as stale.
@@ -223,7 +227,7 @@ struct StaleFilter {
     delivered: Option<u64>,
     recent: VecDeque<u64>,
     suspects: VecDeque<u64>,
-    seen: u32,
+    dimensions: Option<(u32, u32)>,
     stuck_since: Instant,
     last_arrival: Instant,
 }
@@ -236,7 +240,7 @@ impl Default for StaleFilter {
             delivered: None,
             recent: VecDeque::new(),
             suspects: VecDeque::new(),
-            seen: 0,
+            dimensions: None,
             stuck_since: now,
             last_arrival: now,
         }
@@ -260,29 +264,36 @@ impl StaleFilter {
         true
     }
 
-    fn judge(&mut self, h: u64) -> (bool, bool) {
-        let warming = self.seen < FILTER_WARMUP_FRAMES;
-        self.seen = self.seen.saturating_add(1);
-
+    fn judge(&mut self, h: u64, dimensions: (u32, u32), resizing: bool) -> (bool, bool) {
+        if self.dimensions != Some(dimensions) || resizing {
+            self.dimensions = Some(dimensions);
+            self.recent.clear();
+            self.suspects.clear();
+            self.prev_raw = None;
+            self.delivered = None;
+            self.stuck_since = Instant::now();
+        }
+        if resizing {
+            self.prev_raw = Some(h);
+            self.delivered = Some(h);
+            return (true, false);
+        }
         let mut added = false;
-        let pass = if warming {
-            false
-        } else if Some(h) == self.prev_raw || Some(h) == self.delivered {
+        let pass = if Some(h) == self.prev_raw || Some(h) == self.delivered {
             true
         } else if self.suspects.contains(&h) {
             false
         } else {
-            let seen_recently = self.recent.iter().filter(|&&r| r == h).count();
-            if seen_recently >= 2 {
+            let count = self.recent.iter().filter(|&&r| r == h).count();
+            if count >= 2 {
                 if self.suspects.len() >= FILTER_MAX_SUSPECTS {
                     self.suspects.pop_front();
                 }
                 self.suspects.push_back(h);
                 added = true;
             }
-            seen_recently == 0
+            count == 0
         };
-
         if self.recent.len() >= FILTER_RECENT_FRAMES {
             self.recent.pop_front();
         }
@@ -507,6 +518,10 @@ fn set_window_corners(top: HWND, square: bool) {
 /// Cropping and resize happen lazily per request, not per captured frame.
 pub struct WgcCapture {
     _device: ID3D11Device,
+    winrt_device: windows::Graphics::DirectX::Direct3D11::IDirect3DDevice,
+    item: GraphicsCaptureItem,
+    work: Arc<Mutex<FrameWork>>,
+    resizing: Arc<AtomicBool>,
     _pool: Direct3D11CaptureFramePool,
     _session: GraphicsCaptureSession,
     latest: FrameLatest,
@@ -525,27 +540,31 @@ impl WgcCapture {
         let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(&winrt_device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size)?;
 
         let latest: FrameLatest = Arc::new(Mutex::new(Latest::default()));
+        let work = Arc::new(Mutex::new(FrameWork::default()));
+        let resizing = Arc::new(AtomicBool::new(false));
         {
             let latest = latest.clone();
             let device = device.clone();
             let context = context.clone();
-            let work = Arc::new(Mutex::new(FrameWork::default()));
+            let work = work.clone();
+            let resizing = resizing.clone();
             let pacing = Arc::new(Mutex::new(LowPowerPacing { last_burst: Instant::now(), burst_left: 0 }));
             let handler = TypedEventHandler::<Direct3D11CaptureFramePool, IInspectable>::new(move |sender, _| {
                 let sender = sender.ok()?;
+                // Serialize pool recreation with frame checkout and close.
+                let mut work = work.lock().unwrap();
                 if let Ok(frame) = sender.TryGetNextFrame() {
                     if let Some(burst_start) = admit_frame(&pacing) {
-                        let mut work = work.lock().unwrap();
                         let FrameWork { staging, scratch, filter } = &mut *work;
                         if burst_start {
                             filter.prev_raw = None;
                         }
                         if let Ok((w, h)) = process_frame(&device, &context, staging, scratch, &frame) {
-                            if filter.clear_if_stuck() {
+                            if !resizing.load(Ordering::Relaxed) && filter.clear_if_stuck() {
                                 debug_log(LogLevel::Warn, LogMode::Plain, "Wgc: no frame passed the stale filter for 1 s, history cleared");
                             }
-                            let hash = sample_hash(scratch);
-                            let (pass, suspect_added) = filter.judge(hash);
+                            let hash = sample_hash(scratch, w, h);
+                            let (pass, suspect_added) = filter.judge(hash, (w, h), resizing.load(Ordering::Relaxed));
                             if suspect_added {
                                 debug_log(LogLevel::Info, LogMode::Plain, &format!("Wgc: stale-frame suspect {:016x}", hash));
                             }
@@ -555,8 +574,8 @@ impl WgcCapture {
                             latest.suspects_added += suspect_added as u32;
                             if pass {
                                 let filled = std::mem::take(scratch);
-                                let prev = latest.frame.replace(PassedFrame { buf: filled, w, h, hash, passed_at: now });
-                                *scratch = prev.map(|f| f.buf).unwrap_or_default();
+                                let prev = latest.frame.replace(Arc::new(PassedFrame { buf: filled, w, h, hash, passed_at: now }));
+                                *scratch = prev.and_then(|f| Arc::try_unwrap(f).ok()).map(|f| f.buf).unwrap_or_default();
                             } else {
                                 latest.held += 1;
                             }
@@ -577,7 +596,18 @@ impl WgcCapture {
         set_window_corners(top, true);
 
         let bound_client = GameWindow { hwnd: child }.get_client_size();
-        Ok(Self { _device: device, _pool: pool, _session: session, latest, top, child, bound_client })
+        Ok(Self { _device: device, winrt_device, item, work, resizing, _pool: pool, _session: session, latest, top, child, bound_client })
+    }
+
+    fn recreate_for_resize(&mut self, new_client: (i32, i32)) -> windows::core::Result<()> {
+        let size = self.item.Size()?;
+        let mut work = self.work.lock().unwrap();
+        self._pool.Recreate(&self.winrt_device, DirectXPixelFormat::B8G8R8A8UIntNormalized, 2, size)?;
+        work.staging = None;
+        work.filter = StaleFilter::default();
+        self.bound_client = new_client;
+        self.resizing.store(false, Ordering::Relaxed);
+        Ok(())
     }
 
     /// Grows once WGC stops delivering, which is the daemon's liveness signal for the window.
@@ -595,17 +625,16 @@ impl WgcCapture {
         CROP_BUF.with(|buf| {
             let mut cropped = buf.borrow_mut();
 
-            let (cw, ch, passed_at, hash, held, suspects_added) = {
+            let (frame, held, suspects_added) = {
                 let mut guard = self.latest.lock().unwrap();
-                let f = guard.frame.as_ref()?;
-                let (cw, ch) = crop_region(&f.buf, f.w, f.h, (cx, cy, cw0, ch0), &mut cropped)?;
-                let (passed_at, hash) = (f.passed_at, f.hash);
-                (cw, ch, passed_at, hash, std::mem::take(&mut guard.held), std::mem::take(&mut guard.suspects_added))
+                let frame = Arc::clone(guard.frame.as_ref()?);
+                (frame, std::mem::take(&mut guard.held), std::mem::take(&mut guard.suspects_added))
             };
+            let (cw, ch) = crop_region(&frame.buf, frame.w, frame.h, (cx, cy, cw0, ch0), &mut cropped)?;
 
             resize_to_display_into(&cropped, cw, ch, out)?;
             out.as_chunks_mut::<4>().0.iter_mut().for_each(|c| c.swap(0, 2)); // BGRA -> RGBA
-            Some(Delivery { age: passed_at.elapsed(), crop_resize: t0.elapsed(), hash, held, suspects_added })
+            Some(Delivery { age: frame.passed_at.elapsed(), crop_resize: t0.elapsed(), hash: frame.hash, held, suspects_added })
         })
     }
 }
@@ -706,6 +735,7 @@ fn maintain(
     activation: &mut ActivationWatch,
     build_tx: &mpsc::Sender<AssertSend<Option<WgcCapture>>>,
     building: &mut bool,
+    resize_pending: &mut Option<((i32, i32), Instant)>,
 ) {
     // IsWindow stays true for a hidden-but-alive GPG tree; fresh frames are the real liveness signal.
     let w = match cap.as_ref() {
@@ -715,6 +745,7 @@ fn maintain(
 
     match w {
         None => {
+            *resize_pending = None;
             activation.discard();
             // Starting the game belongs to the launcher, so this only waits for the window to return.
             if cap.is_some() {
@@ -728,11 +759,45 @@ fn maintain(
             park.arm_hook(top);
             activation.update(top);
 
-            let needs_rebind = cap.as_ref().map(|c| w.hwnd != c.child || w.get_client_size() != c.bound_client).unwrap_or(true);
-            if needs_rebind && !*building {
-                *building = true;
-                spawn_build(w.hwnd, top, build_tx.clone());
+            if cap.as_ref().is_none_or(|c| w.hwnd != c.child) {
+                *resize_pending = None;
+                if !*building {
+                    *building = true;
+                    spawn_build(w.hwnd, top, build_tx.clone());
+                }
+                return;
             }
+
+            let size = w.get_client_size();
+            let current = cap.as_ref().unwrap();
+            if size == current.bound_client {
+                *resize_pending = None;
+                current.resizing.store(false, Ordering::Relaxed);
+                return;
+            }
+            current.resizing.store(true, Ordering::Relaxed);
+            if size.0 <= 0 || size.1 <= 0 || *building {
+                return;
+            }
+            match resize_pending {
+                Some((pending_size, since)) if *pending_size == size => {
+                    if since.elapsed() < RESIZE_SETTLE {
+                        return;
+                    }
+                }
+                _ => {
+                    *resize_pending = Some((size, Instant::now()));
+                    return;
+                }
+            }
+            if let Some(c) = cap.as_mut() {
+                if let Err(e) = c.recreate_for_resize(size) {
+                    debug_log(LogLevel::Warn, LogMode::Plain, &format!("Wgc: pool Recreate failed ({}), rebinding", e));
+                    *building = true;
+                    spawn_build(w.hwnd, top, build_tx.clone());
+                }
+            }
+            *resize_pending = None;
         }
     }
 }
@@ -774,6 +839,7 @@ pub fn run_daemon() {
     let mut park = ParkState::new();
     let mut activation = ActivationWatch::new();
     let mut building = false;
+    let mut resize_pending: Option<((i32, i32), Instant)> = None;
 
     // Blocking accept on a dedicated thread feeding a channel: zero accept latency.
     let (tx, rx) = mpsc::channel::<TcpStream>();
@@ -802,6 +868,7 @@ pub fn run_daemon() {
                 debug_log(LogLevel::Info, LogMode::Plain, &format!("Wgc: bound {}", describe_window(c.child, Some(c.top))));
                 check_render_resolution();
                 cap = Some(c);
+                resize_pending = None;
             }
         }
 
@@ -832,7 +899,7 @@ pub fn run_daemon() {
         // Runs outside the recv branch so maintenance still ticks while a busy MAA keeps recv_timeout returning Ok.
         if last_maint.elapsed() >= MAINTENANCE_INTERVAL {
             last_maint = Instant::now();
-            maintain(&mut cap, &mut park, &mut activation, &build_tx, &mut building);
+            maintain(&mut cap, &mut park, &mut activation, &build_tx, &mut building, &mut resize_pending);
         }
     }
 
