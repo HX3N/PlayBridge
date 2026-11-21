@@ -144,11 +144,11 @@ pub fn execute_command(command: Command) {
         Command::ForceStop => {
             if let Some(w) = window {
                 input::terminate(&w);
+                debug_log(LogLevel::Info, LogMode::Plain, "ForceStop: shutdown requested");
+                display_notification(Notification::GpgShutdown);
             } else {
                 debug_log(LogLevel::Warn, LogMode::Plain, "ForceStop: window not found");
             }
-            debug_log(LogLevel::Info, LogMode::Plain, "ForceStop: shutdown requested");
-            display_notification(Notification::GpgShutdown);
         }
         Command::ToggleTouchOverlay => {
             toggle_touch_overlay();

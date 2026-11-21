@@ -1,24 +1,16 @@
 use std::{
-    ffi::c_void,
     os::windows::process::CommandExt,
     process::Command,
     thread,
     time::{Duration, Instant},
 };
 
-use win_screenshot::prelude::*;
-use windows::Win32::Foundation::HWND;
-
-use crate::game::window::{get_window_class, GameWindow};
+use crate::game::window::GameWindow;
 use crate::shared::{CREATE_NO_WINDOW, DETACHED_PROCESS};
 use crate::sys::config::{config, set_client, Client};
 use crate::sys::logging::{debug_log, LogLevel, LogMode};
 use crate::sys::notification::{display_notification, Notification};
 use crate::sys::process::{already_running, mutex_exists};
-
-const WRAPPER_CLASS: &str = "HwndWrapper";
-
-const LOADING_TITLE: &str = "Google Play Games";
 
 pub const LAUNCHER_ARG: &str = "--launcher-daemon";
 pub const LAUNCHER_MUTEX: &str = "Local\\PlayBridgeLauncher";
@@ -120,7 +112,6 @@ pub fn run_launcher_daemon() {
 
     let started = Instant::now();
     let mut last_launch: Option<Instant> = None;
-    let mut was_loading = false;
     let mut attempts = 0;
     let mut stalled = false;
 
@@ -135,12 +126,6 @@ pub fn run_launcher_daemon() {
             debug_log(LogLevel::Info, LogMode::End, &format!("Launcher: game ready in {} ms", started.elapsed().as_millis()));
             return;
         }
-
-        let loading = is_loading_screen_active();
-        if was_loading && !loading {
-            debug_log(LogLevel::Info, LogMode::Plain, "Launcher: Google Play Games window no longer visible");
-        }
-        was_loading = loading;
 
         let due = last_launch.is_none_or(|t| t.elapsed() >= LAUNCH_RETRY_COOLDOWN);
         if due && attempts < MAX_LAUNCH_ATTEMPTS {
@@ -162,11 +147,4 @@ pub fn run_launcher_daemon() {
 
 fn resolve_client(package: &str) -> Option<Client> {
     Client::SUPPORTED.into_iter().find(|&client| package.starts_with(client.package()))
-}
-
-fn is_loading_screen_active() -> bool {
-    window_list().unwrap_or_default().into_iter().any(|i| {
-        i.window_name == LOADING_TITLE
-            && get_window_class(HWND(i.hwnd as usize as *mut c_void)).is_some_and(|class_name| class_name.starts_with(WRAPPER_CLASS))
-    })
 }
