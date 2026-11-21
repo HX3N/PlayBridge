@@ -4,7 +4,7 @@ use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
     System::Threading::{AttachThreadInput, GetCurrentThreadId},
     UI::{
-        Input::KeyboardAndMouse::{EnableWindow, ReleaseCapture},
+        Input::KeyboardAndMouse::{EnableWindow, MapVirtualKeyW, ReleaseCapture, MAPVK_VK_TO_VSC},
         WindowsAndMessaging::{PostMessageW, WM_CHAR, WM_CLOSE, WM_KEYDOWN, WM_KEYUP},
     },
 };
@@ -60,13 +60,19 @@ pub fn adb_keycode_to_vk(adb_keycode: i32) -> Option<i32> {
     }
 }
 
+// GPG reads the scan code in lParam bits 16-23, not the virtual key.
+fn key_lparam(vk_code: i32) -> u32 {
+    let scan = unsafe { MapVirtualKeyW(vk_code as u32, MAPVK_VK_TO_VSC) };
+    1 | scan << 16
+}
+
 pub fn key_down(window: &GameWindow, vk_code: i32) {
-    let lparam = LPARAM((vk_code << 16) as isize);
+    let lparam = LPARAM(key_lparam(vk_code) as isize);
     post_message(window.hwnd, WM_KEYDOWN, WPARAM(vk_code as usize), lparam);
 }
 
 pub fn key_up(window: &GameWindow, vk_code: i32) {
-    let lparam = LPARAM((vk_code << 16 | 1 << 30 | 1 << 31) as isize);
+    let lparam = LPARAM((key_lparam(vk_code) | 1 << 30 | 1 << 31) as isize);
     post_message(window.hwnd, WM_KEYUP, WPARAM(vk_code as usize), lparam);
 }
 
@@ -79,8 +85,10 @@ pub fn input_keyevent(window: &GameWindow, adb_keycode: i32) {
 }
 
 pub fn input_text(window: &GameWindow, text: &str) {
-    for ch in text.chars() {
-        post_message(window.hwnd, WM_CHAR, WPARAM(ch as usize), LPARAM(0));
-        thread::sleep(Duration::from_millis(TEXT_INPUT_DELAY_MS));
+    for (i, unit) in text.encode_utf16().enumerate() {
+        if i > 0 {
+            thread::sleep(Duration::from_millis(TEXT_INPUT_DELAY_MS));
+        }
+        post_message(window.hwnd, WM_CHAR, WPARAM(unit as usize), LPARAM(0));
     }
 }
