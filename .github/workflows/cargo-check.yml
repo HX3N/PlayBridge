@@ -2,6 +2,7 @@ name: cargo check
 
 on:
   push:
+    branches: ["main"]
   pull_request:
 
 env:
@@ -11,7 +12,7 @@ jobs:
   fmt:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
@@ -21,11 +22,10 @@ jobs:
   check:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - name: cargo check
-        run: cargo check
+      - uses: Swatinem/rust-cache@v2
       - name: cargo clippy
         run: cargo clippy -- -D warnings

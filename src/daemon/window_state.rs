@@ -16,6 +16,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     EVENT_SYSTEM_MINIMIZESTART, MSG, SM_CYVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SW_MINIMIZE,
     SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE, WINDOWPLACEMENT, WINDOW_EX_STYLE, WINEVENT_OUTOFCONTEXT, WS_POPUP,
 };
+use winreg::enums::{HKEY_CURRENT_USER, KEY_SET_VALUE};
+use winreg::RegKey;
 
 use crate::game::window::{gui_thread_info, top_level, GameWindow};
 use crate::shared::REG_PATH_STATE;
@@ -140,7 +142,9 @@ fn store_origin(key: &str, x: i32, y: i32) {
 }
 
 fn clear_origin(key: &str) {
-    let _ = set_registry(key, String::new(), REG_PATH_STATE);
+    let _ = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey_with_flags(REG_PATH_STATE, KEY_SET_VALUE)
+        .and_then(|state| state.delete_value(key));
 }
 
 fn read_origin(key: &str) -> Option<(i32, i32)> {

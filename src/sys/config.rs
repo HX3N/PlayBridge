@@ -13,6 +13,9 @@ const REPOSITORY_URL: &str = "https://api.github.com/repos/HX3N/PlayBridge/relea
 
 pub const REG_PATH_CONFIG: &str = r"Software\PlayBridge\config";
 pub const REG_PATH_COOLDOWN: &str = r"Software\PlayBridge\cooldown";
+/// The MAA that ran `devices`. The daemon has no other way to tell that MAA is gone.
+pub const KEY_MAA_PID: &str = "MAA_PID";
+pub const KEY_LOG_DEPTH: &str = "LOG_DEPTH";
 pub const UPDATE_CHECK_COOLDOWN: u64 = 60 * 60 * 24;
 
 pub const MAX_TOUCH_OVERLAY_FILES: usize = 100;
@@ -126,6 +129,19 @@ pub fn set_client(client: Client) {
     Config::reload();
 }
 
+/// Notification language is picked by the stored client, so the update lands before the toast.
+pub fn adopt_client(client: Client) {
+    let previous = config().client;
+    if previous == client {
+        return;
+    }
+    set_client(client);
+
+    if previous != Client::Empty {
+        display_notification(Notification::ClientMismatch(previous.package().to_string(), client.package().to_string()));
+    }
+}
+
 pub fn version() -> &'static str {
     option_env!("PLAYBRIDGE_VERSION").unwrap_or(DEVELOPMENT_VERSION)
 }
@@ -144,7 +160,6 @@ pub fn check_version() {
     let previous = if stored_version.is_empty() { "(none)" } else { stored_version.as_str() };
     debug_log(LogLevel::Info, LogMode::Plain, &format!("Version: updated {} -> {}", previous, current_version));
     set_registry("VERSION", current_version, REG_PATH_CONFIG).unwrap();
-    Config::reload();
 }
 
 pub fn check_for_update() {
@@ -185,11 +200,9 @@ pub fn check_for_update() {
 }
 
 pub fn toggle_touch_overlay() {
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let (key, _) = hkcu.create_subkey(REG_PATH_CONFIG).unwrap();
-    let current_val: u32 = key.get_value("TOUCH_OVERLAY").unwrap_or(0);
+    let current_val: u32 = get_registry("TOUCH_OVERLAY", 0u32, REG_PATH_CONFIG);
     let new_val: u32 = if current_val == 0 { 1 } else { 0 };
-    key.set_value("TOUCH_OVERLAY", &new_val).unwrap();
+    set_registry("TOUCH_OVERLAY", new_val, REG_PATH_CONFIG).unwrap();
 
     let status = if new_val == 1 { "ON" } else { "OFF" };
     reply(&format!("TOUCH_OVERLAY: {}", status));

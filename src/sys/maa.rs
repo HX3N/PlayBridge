@@ -16,19 +16,19 @@ use windows::Win32::{
     },
 };
 
-use crate::shared::{KEY_MAA_PID, REG_PATH_STATE};
-use crate::sys::config::get_registry;
+use crate::shared::REG_PATH_STATE;
+use crate::sys::config::{get_registry, KEY_MAA_PID};
 
 const CONFIG_RELATIVE_PATH: &str = "config/gui.new.json";
 
 /// None when the parent is not MAA, or its config is missing or unreadable.
-pub fn client_type() -> Option<String> {
-    let dir = parent_exe_dir()?;
+pub fn client_type(pid: u32) -> Option<String> {
+    let dir = parent_exe_dir(pid)?;
     read_client_type(&dir.join(CONFIG_RELATIVE_PATH))
 }
 
-fn parent_exe_dir() -> Option<PathBuf> {
-    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, parent_pid()?) }.ok()?;
+fn parent_exe_dir(pid: u32) -> Option<PathBuf> {
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
 
     let mut buffer = [0u16; MAX_PATH as usize];
     let mut len = buffer.len() as u32;

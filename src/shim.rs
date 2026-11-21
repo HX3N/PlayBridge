@@ -93,11 +93,12 @@ pub fn parse_command(args: &[String]) -> Command {
 /// Only this process has MAA as its parent, so nowhere else can read the config it selected.
 /// False means MAA is set to a client with no Google Play Games package, so nothing should be launched.
 fn apply_maa_client() -> bool {
-    if let Some(pid) = maa::parent_pid() {
-        let _ = config::set_registry(shared::KEY_MAA_PID, pid, shared::REG_PATH_STATE);
+    let pid = maa::parent_pid();
+    if let Some(pid) = pid {
+        let _ = config::set_registry(config::KEY_MAA_PID, pid, shared::REG_PATH_STATE);
     }
 
-    let Some(client_type) = maa::client_type() else {
+    let Some(client_type) = pid.and_then(maa::client_type) else {
         debug_log(LogLevel::Warn, LogMode::Plain, "Client: MAA config unreadable, falling back to window title");
         return true;
     };
@@ -115,11 +116,9 @@ fn apply_maa_client() -> bool {
 }
 
 pub fn execute_command(command: Command) {
-    let window = GameWindow::find();
-
     match command {
         Command::Empty => {
-            if let Some(w) = window {
+            if let Some(w) = GameWindow::find() {
                 capture::screenshot(&w);
             } else {
                 debug_log(LogLevel::Warn, LogMode::Plain, "Screenshot: window not found");
@@ -131,6 +130,8 @@ pub fn execute_command(command: Command) {
             reply("connected to Google Play Games");
         }
         Command::StartActivity { intent } => {
+            // The running game decides the client: finding its window adopts it before the intent is judged.
+            let _ = GameWindow::find();
             if apply_intent_package(&intent) {
                 ensure_launcher();
             }
@@ -142,13 +143,13 @@ pub fn execute_command(command: Command) {
             reply(&text);
         }
         Command::ForceStop => {
-            if let Some(w) = window {
+            if let Some(w) = GameWindow::find() {
                 input::terminate(&w);
+                debug_log(LogLevel::Info, LogMode::Plain, "ForceStop: shutdown requested");
+                display_notification(Notification::GpgShutdown);
             } else {
                 debug_log(LogLevel::Warn, LogMode::Plain, "ForceStop: window not found");
             }
-            debug_log(LogLevel::Info, LogMode::Plain, "ForceStop: shutdown requested");
-            display_notification(Notification::GpgShutdown);
         }
         Command::ToggleTouchOverlay => {
             toggle_touch_overlay();
@@ -163,12 +164,12 @@ pub fn execute_command(command: Command) {
             reply("127.0.0.1:6000\tdevice");
 
             check_version();
-            check_for_update();
 
             // Preload: GPG takes a while to come up, so the launcher starts before MAA asks for a screen.
             if apply_maa_client() {
                 ensure_launcher();
             }
+            check_for_update();
         }
         Command::GetPropRelease => {
             reply("14");
@@ -199,14 +200,14 @@ pub fn execute_command(command: Command) {
             reply("0");
         }
         Command::KeyEvent { keycode } => {
-            if let Some(w) = window {
+            if let Some(w) = GameWindow::find() {
                 input::input_keyevent(&w, keycode);
             } else {
                 debug_log(LogLevel::Warn, LogMode::Plain, "KeyEvent: window not found");
             }
         }
         Command::Text { text } => {
-            if let Some(w) = window {
+            if let Some(w) = GameWindow::find() {
                 input::input_text(&w, &text);
             } else {
                 debug_log(LogLevel::Warn, LogMode::Plain, "Text: window not found");

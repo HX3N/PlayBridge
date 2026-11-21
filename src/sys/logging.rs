@@ -10,8 +10,8 @@ use std::{
 
 use chrono::Local;
 
-use crate::shared::{KEY_LOG_DEPTH, REG_PATH_STATE};
-use crate::sys::config::{get_registry, set_registry};
+use crate::shared::REG_PATH_STATE;
+use crate::sys::config::{get_registry, set_registry, KEY_LOG_DEPTH};
 use crate::sys::notification::{display_notification, Notification};
 use crate::sys::process::acquire_lock;
 
@@ -54,10 +54,12 @@ fn log_depth() -> u32 {
     get_registry(KEY_LOG_DEPTH, 0u32, REG_PATH_STATE)
 }
 
-fn shift_log_depth(delta: i32) {
+fn shift_log_depth(delta: i32) -> u32 {
     let _lock = acquire_lock(LOG_DEPTH_MUTEX, LOG_DEPTH_WAIT_MS);
-    let next = (log_depth() as i32 + delta).max(0) as u32;
+    let previous = log_depth();
+    let next = (previous as i32 + delta).max(0) as u32;
     let _ = set_registry(KEY_LOG_DEPTH, next, REG_PATH_STATE);
+    previous
 }
 
 /// The stored depth outlives a process killed with a block open, and the reboot after it.
@@ -80,11 +82,13 @@ pub fn debug_log(level: LogLevel, mode: LogMode, message: &str) {
 
     let flat_message = message.replace(['\n', '\t'], " ");
 
-    // Both block lines are drawn at the outer depth, so End shifts before its line and Start after.
-    if matches!(mode, LogMode::End) {
-        shift_log_depth(-1);
-    }
-    let indent = "│".repeat(log_depth() as usize);
+    // Both block lines are drawn at the outer depth.
+    let depth = match mode {
+        LogMode::End => shift_log_depth(-1).saturating_sub(1),
+        LogMode::Start => shift_log_depth(1),
+        LogMode::Plain => log_depth(),
+    };
+    let indent = "│".repeat(depth as usize);
 
     let log = match mode {
         LogMode::Plain => format!("[{}][{}]{} {}", now, level_tag, indent, flat_message),
@@ -93,10 +97,6 @@ pub fn debug_log(level: LogLevel, mode: LogMode, message: &str) {
     };
 
     let _ = writeln!(file, "{}", log);
-
-    if matches!(mode, LogMode::Start) {
-        shift_log_depth(1);
-    }
 }
 
 static REPLIED: AtomicBool = AtomicBool::new(false);

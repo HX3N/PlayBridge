@@ -14,7 +14,7 @@ use windows::Win32::{
     },
 };
 
-use crate::sys::config::{config, set_client, Client};
+use crate::sys::config::{adopt_client, Client};
 use crate::sys::logging::{debug_log, LogLevel, LogMode};
 use crate::sys::notification::{display_notification, Notification};
 
@@ -53,7 +53,7 @@ impl GameWindow {
             Some((child, client))
         })?;
 
-        adopt_running_client(client);
+        adopt_client(client);
         Some(Self { hwnd })
     }
 
@@ -114,19 +114,6 @@ pub fn await_modal_end(top: HWND) -> Option<Duration> {
     }
 }
 
-/// Notification language is picked by the stored client, so the update lands before the toast.
-fn adopt_running_client(client: Client) {
-    let previous = config().client;
-    if previous == client {
-        return;
-    }
-    set_client(client);
-
-    if previous != Client::Empty {
-        display_notification(Notification::ClientMismatch(previous.package().to_string(), client.package().to_string()));
-    }
-}
-
 fn resolve_client_by_title(title: &str) -> Option<Client> {
     Client::SUPPORTED.into_iter().find(|&client| title.starts_with(client.title()))
 }
@@ -135,7 +122,7 @@ fn find_crosvm_child(parent_hwnd: HWND) -> Option<HWND> {
     unsafe { FindWindowExW(Some(parent_hwnd), None, CROSVM_CLASS, None).ok().filter(|h| !h.0.is_null()) }
 }
 
-pub(crate) fn get_window_class(hwnd: HWND) -> Option<String> {
+fn get_window_class(hwnd: HWND) -> Option<String> {
     let mut buffer: [u16; 256] = [0; 256];
     unsafe {
         let len = GetClassNameW(hwnd, &mut buffer);

@@ -100,7 +100,7 @@ thread_local! {
     static RESIZER: RefCell<Resizer> = RefCell::new(Resizer::new());
 }
 
-pub fn resize_to_display(pixels: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
+fn resize_to_display(pixels: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     resize_to_display_into(pixels, w, h, &mut out)?;
     Some(out)
@@ -115,7 +115,7 @@ pub fn resize_to_display_into(pixels: &[u8], w: u32, h: u32, out: &mut Vec<u8>) 
     RESIZER.with(|r| r.borrow_mut().resize(&src_image, &mut dst_image, &options)).ok()
 }
 
-pub fn black_frame_pixels() -> Vec<u8> {
+fn black_frame_pixels() -> Vec<u8> {
     vec![0u8; DISPLAY_FRAME_BYTES]
 }
 
@@ -151,17 +151,18 @@ pub fn transmit_pixels_nc(pixels: &mut [u8], port: u16) {
     let _ = stream.read(&mut dump);
 }
 
+fn put_pixel_in_bounds(img: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>) {
+    if x >= 0 && x < img.width() as i32 && y >= 0 && y < img.height() as i32 {
+        img.put_pixel(x as u32, y as u32, color);
+    }
+}
+
 fn draw_filled_circle(img: &mut RgbaImage, cx: i32, cy: i32, color: Rgba<u8>) {
     let radius = 1;
-    let (w, h) = (img.width() as i32, img.height() as i32);
     for dy in -radius..=radius {
         for dx in -radius..=radius {
             if dx * dx + dy * dy <= radius * radius {
-                let nx = cx + dx;
-                let ny = cy + dy;
-                if nx >= 0 && nx < w && ny >= 0 && ny < h {
-                    img.put_pixel(nx as u32, ny as u32, color);
-                }
+                put_pixel_in_bounds(img, cx + dx, cy + dy, color);
             }
         }
     }
@@ -169,16 +170,11 @@ fn draw_filled_circle(img: &mut RgbaImage, cx: i32, cy: i32, color: Rgba<u8>) {
 
 fn draw_x(img: &mut RgbaImage, cx: i32, cy: i32, color: Rgba<u8>) {
     let size = 4;
-    let (w, h) = (img.width() as i32, img.height() as i32);
     for i in -size..=size {
         for (dx, dy) in [(i, i), (i, -i)] {
             for ox in -1..=1 {
                 for oy in -1..=1 {
-                    let nx = cx + dx + ox;
-                    let ny = cy + dy + oy;
-                    if nx >= 0 && nx < w && ny >= 0 && ny < h {
-                        img.put_pixel(nx as u32, ny as u32, color);
-                    }
+                    put_pixel_in_bounds(img, cx + dx + ox, cy + dy + oy, color);
                 }
             }
         }
@@ -202,7 +198,7 @@ fn cleanup_old_captures(folder: &std::path::Path) {
         return;
     }
 
-    files.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH));
+    files.sort_by_key(|e| e.file_name());
 
     let num_to_remove = files.len().saturating_sub(MAX_TOUCH_OVERLAY_FILES - 1);
 
