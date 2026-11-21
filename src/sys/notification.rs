@@ -139,8 +139,8 @@ impl Notification {
             | Self::AdbInputUnsupported
             | Self::UnsupportedClient(..)
             | Self::ClientMismatch(..)
-            | Self::GameNotInstalled(..) => Some(10),
-            Self::InputHeld => Some(10),
+            | Self::GameNotInstalled(..)
+            | Self::InputHeld => Some(10),
             Self::WindowParked => Some(2),
             _ => None,
         }
@@ -169,11 +169,7 @@ impl Notification {
 }
 
 pub fn display_notification(notification: Notification) {
-    let level = notification.level();
     let tag = notification.tag();
-    let title = notification.title();
-    let body = notification.body();
-
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
     if let Some(cooldown) = notification.cooldown() {
@@ -181,6 +177,10 @@ pub fn display_notification(notification: Notification) {
             return;
         }
     }
+
+    let level = notification.level();
+    let title = notification.title();
+    let body = notification.body();
 
     debug_log(level, LogMode::Plain, &format!("Notification: {}", body));
 

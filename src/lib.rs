@@ -116,7 +116,9 @@ fn request_frame_with_retry(buf: &mut Vec<u8>) -> bool {
         if attempt == 0 {
             ensure_daemon();
         }
-        std::thread::sleep(Duration::from_millis(FRAME_RETRY_DELAY_MS));
+        if attempt + 1 < FRAME_RETRY_COUNT {
+            std::thread::sleep(Duration::from_millis(FRAME_RETRY_DELAY_MS));
+        }
     }
     false
 }

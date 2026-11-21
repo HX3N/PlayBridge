@@ -144,7 +144,6 @@ pub fn check_version() {
     let previous = if stored_version.is_empty() { "(none)" } else { stored_version.as_str() };
     debug_log(LogLevel::Info, LogMode::Plain, &format!("Version: updated {} -> {}", previous, current_version));
     set_registry("VERSION", current_version, REG_PATH_CONFIG).unwrap();
-    Config::reload();
 }
 
 pub fn check_for_update() {

@@ -202,7 +202,7 @@ fn cleanup_old_captures(folder: &std::path::Path) {
         return;
     }
 
-    files.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH));
+    files.sort_by_key(|e| e.file_name());
 
     let num_to_remove = files.len().saturating_sub(MAX_TOUCH_OVERLAY_FILES - 1);
 
