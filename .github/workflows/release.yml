@@ -17,20 +17,22 @@ jobs:
   build_and_release:
     if: contains(github.event.head_commit.message, '[release]') || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
 
       - name: Resolve version tag
         id: version_tag
         shell: pwsh
+        env:
+          TAG_OVERRIDE: ${{ github.event.inputs.tag_override }}
         run: |
-          $override = "${{ github.event.inputs.tag_override }}"
+          $override = $env:TAG_OVERRIDE
           if ($override) {
             # reuse an existing tag; strip leading 'v' to avoid doubling
             $version = $override -replace '^v', ''
@@ -39,21 +41,13 @@ jobs:
           }
           echo "VERSION=$version" >> $env:GITHUB_OUTPUT
 
-      - name: info
-        run: |
-          echo "tag_name: v${{ steps.version_tag.outputs.VERSION }}"
-          echo "release_name: v${{ steps.version_tag.outputs.VERSION }}"
-
       - name: Build
-        run: cargo build --release --verbose
+        run: cargo build --release
         env:
           PLAYBRIDGE_VERSION: v${{ steps.version_tag.outputs.VERSION }}
 
-      - name: List build directory
-        run: dir target\release\
-
       - name: Create release and upload assets
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version_tag.outputs.VERSION }}
           name: v${{ steps.version_tag.outputs.VERSION }}
