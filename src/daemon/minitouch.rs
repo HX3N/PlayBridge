@@ -169,10 +169,6 @@ pub fn run_minitouch_daemon() {
     }
 
     while let Some(Ok(line)) = iterator.next() {
-        if line.is_empty() {
-            continue;
-        }
-
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.is_empty() {
             continue;
@@ -236,11 +232,7 @@ pub fn run_minitouch_daemon() {
                 }
 
                 let Some(win) = window.as_ref() else {
-                    // Nothing to press against, so the press is forgotten and a rebind starts from a fresh DOWN.
-                    if is_down {
-                        debug_log(LogLevel::Warn, LogMode::Plain, "Minitouch: touch dropped, window unbound");
-                    }
-                    is_down = false;
+                    // No window to press on: drop the touch so the next bind starts from a fresh DOWN.
                     touch_path.clear();
                     continue;
                 };

@@ -7,7 +7,7 @@ use std::{
 
 use crate::game::window::GameWindow;
 use crate::shared::{CREATE_NO_WINDOW, DETACHED_PROCESS};
-use crate::sys::config::{config, set_client, Client};
+use crate::sys::config::{adopt_client, config, set_client, Client};
 use crate::sys::logging::{debug_log, LogLevel, LogMode};
 use crate::sys::notification::{display_notification, Notification};
 use crate::sys::process::{already_running, mutex_exists};
@@ -35,15 +35,14 @@ fn adopt_installed_client() -> Option<crate::sys::store::AppRecord> {
         return None;
     }
 
-    set_client(client);
-    display_notification(Notification::ClientMismatch(previous.package().to_string(), client.package().to_string()));
+    adopt_client(client);
     Some(record)
 }
 
 /// False means the intent contradicts the client MAA already told us about, so the caller
 /// should not go on to launch anything.
 pub fn apply_intent_package(intent: &str) -> bool {
-    let package = intent.split('/').next().unwrap_or(intent);
+    let package = intent.split_once('/').map_or(intent, |(package, _)| package);
 
     if config().client.package() == package {
         debug_log(LogLevel::Info, LogMode::Plain, &format!("Client: intent matches {}", package));

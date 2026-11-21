@@ -679,8 +679,9 @@ fn handle_client(mut stream: TcpStream, cap: Option<&WgcCapture>) {
     // stops composing too, so the last frame is still the current screen while the window lives.
     let t0 = Instant::now();
     let mut rgba = FRAME_OUT.take();
-    let delivery = cap.and_then(|c| c.latest_display_rgba(&mut rgba)).filter(|d| {
-        d.age < FRAME_STALE || (d.age < FRAME_REUSE_LIMIT && cap.is_some_and(|c| unsafe { IsWindow(Some(c.child)).as_bool() }))
+    let delivery = cap.and_then(|c| {
+        c.latest_display_rgba(&mut rgba)
+            .filter(|d| d.age < FRAME_STALE || (d.age < FRAME_REUSE_LIMIT && unsafe { IsWindow(Some(c.child)).as_bool() }))
     });
     let reused = delivery.as_ref().is_some_and(|d| d.age >= FRAME_STALE);
 
@@ -764,17 +765,16 @@ fn maintain(
             park.arm_hook(top);
             activation.update(top);
 
-            if cap.as_ref().is_none_or(|c| w.hwnd != c.child) {
+            let Some(current) = cap.as_mut().filter(|c| w.hwnd == c.child) else {
                 *resize_pending = None;
                 if !*building {
                     *building = true;
                     spawn_build(w.hwnd, top, build_tx.clone());
                 }
                 return;
-            }
+            };
 
             let size = w.get_client_size();
-            let current = cap.as_ref().unwrap();
             if size == current.bound_client {
                 *resize_pending = None;
                 current.resizing.store(false, Ordering::Relaxed);
@@ -795,12 +795,10 @@ fn maintain(
                     return;
                 }
             }
-            if let Some(c) = cap.as_mut() {
-                if let Err(e) = c.recreate_for_resize(size) {
-                    debug_log(LogLevel::Warn, LogMode::Plain, &format!("Wgc: pool Recreate failed ({}), rebinding", e));
-                    *building = true;
-                    spawn_build(w.hwnd, top, build_tx.clone());
-                }
+            if let Err(e) = current.recreate_for_resize(size) {
+                debug_log(LogLevel::Warn, LogMode::Plain, &format!("Wgc: pool Recreate failed ({}), rebinding", e));
+                *building = true;
+                spawn_build(w.hwnd, top, build_tx.clone());
             }
             *resize_pending = None;
         }

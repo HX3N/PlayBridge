@@ -10,8 +10,8 @@ use std::{
 
 use chrono::Local;
 
-use crate::shared::{KEY_LOG_DEPTH, REG_PATH_STATE};
-use crate::sys::config::{get_registry, set_registry};
+use crate::shared::REG_PATH_STATE;
+use crate::sys::config::{get_registry, set_registry, KEY_LOG_DEPTH};
 use crate::sys::notification::{display_notification, Notification};
 use crate::sys::process::acquire_lock;
 

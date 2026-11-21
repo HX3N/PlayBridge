@@ -95,7 +95,7 @@ pub fn parse_command(args: &[String]) -> Command {
 fn apply_maa_client() -> bool {
     let pid = maa::parent_pid();
     if let Some(pid) = pid {
-        let _ = config::set_registry(shared::KEY_MAA_PID, pid, shared::REG_PATH_STATE);
+        let _ = config::set_registry(config::KEY_MAA_PID, pid, shared::REG_PATH_STATE);
     }
 
     let Some(client_type) = pid.and_then(maa::client_type) else {

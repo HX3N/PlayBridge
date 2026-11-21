@@ -4,9 +4,13 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, WAIT_ABANDONED, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{CreateMutexW, OpenMutexW, ReleaseMutex, WaitForSingleObject, SYNCHRONIZATION_SYNCHRONIZE};
 
+fn to_wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(Some(0)).collect()
+}
+
 /// Claims the name for this process, so only a process that means to *be* the daemon may call it.
 pub fn already_running(mutex_name: &str) -> bool {
-    let name: Vec<u16> = mutex_name.encode_utf16().chain(Some(0)).collect();
+    let name = to_wide(mutex_name);
     unsafe {
         let _ = CreateMutexW(None, false, PCWSTR(name.as_ptr()));
         GetLastError() == ERROR_ALREADY_EXISTS
@@ -27,7 +31,7 @@ impl Drop for NamedLock {
 /// An abandoned mutex counts as acquired:
 /// a holder that died mid-update would otherwise lock the name for good.
 pub fn acquire_lock(mutex_name: &str, timeout_ms: u32) -> Option<NamedLock> {
-    let name: Vec<u16> = mutex_name.encode_utf16().chain(Some(0)).collect();
+    let name = to_wide(mutex_name);
     let handle = unsafe { CreateMutexW(None, false, PCWSTR(name.as_ptr())) }.ok()?;
 
     match unsafe { WaitForSingleObject(handle, timeout_ms) } {
@@ -42,7 +46,7 @@ pub fn acquire_lock(mutex_name: &str, timeout_ms: u32) -> Option<NamedLock> {
 /// Checks without claiming, which `already_running` cannot do: creating the mutex would make the
 /// caller its owner and every later check would report a daemon that never started.
 pub fn mutex_exists(mutex_name: &str) -> bool {
-    let name: Vec<u16> = mutex_name.encode_utf16().chain(Some(0)).collect();
+    let name = to_wide(mutex_name);
     match unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, PCWSTR(name.as_ptr())) } {
         Ok(handle) => {
             unsafe {

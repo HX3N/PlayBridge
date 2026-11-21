@@ -5,7 +5,7 @@
 // and point MAA's "MuMu emulator path" at <fakemumu>.
 //
 // Release uses `panic = "abort"`, so a panic here takes down MAA.
-// Every export must be panic-free; turn all errors into nemu error codes (return > 0).
+// Every export must be panic-free; a failed capture fills a black frame, only a bad pixel buffer returns > 0.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -126,7 +126,7 @@ fn request_frame_with_retry(buf: &mut Vec<u8>) -> bool {
 // nemu ABI exports. Return convention: 0 = success, > 0 = failure.
 
 /// Ignores path/index (the daemon finds the GPG window).
-/// Always returns a fixed non-zero handle; if the daemon can't start, capture fails and MAA falls back.
+/// Always returns a fixed non-zero handle; if the daemon can't start, captures return a black frame.
 #[no_mangle]
 pub extern "C" fn nemu_connect(_path: *const u16, _index: i32) -> i32 {
     ensure_daemon();
@@ -178,17 +178,10 @@ pub unsafe extern "C" fn nemu_capture_display(
     }
 
     INFLIGHT.fetch_add(1, Ordering::AcqRel);
-    // A poisoned lock must not panic here, so fall back to a one-off buffer instead of unwrapping.
-    match FRAME_BUF.lock() {
-        Ok(mut buf) => {
-            let ok = request_frame_with_retry(&mut buf);
-            write_frame_bottom_up(ok.then_some(buf.as_slice()), pixels);
-        }
-        Err(_) => {
-            let mut buf = Vec::new();
-            let ok = request_frame_with_retry(&mut buf);
-            write_frame_bottom_up(ok.then_some(buf.as_slice()), pixels);
-        }
+    {
+        let mut buf = FRAME_BUF.lock().unwrap_or_else(|e| e.into_inner());
+        let ok = request_frame_with_retry(&mut buf);
+        write_frame_bottom_up(ok.then_some(buf.as_slice()), pixels);
     }
     INFLIGHT.fetch_sub(1, Ordering::AcqRel);
     // Per-frame success is intentionally silent — the daemon logs the delivery.
